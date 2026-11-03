@@ -5,7 +5,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 
 !define APPNAME   "울림"
-!define VERSION   "1.0.1"
+!define VERSION   "1.0.2"
 !define PUBLISHER "Ullim"
 !define EXE       "Ullim.exe"
 !define AUMID     "kr.ullim.player"
@@ -31,7 +31,7 @@ BrandingText "${APPNAME} ${VERSION}"
 ShowInstDetails nevershow
 ShowUninstDetails nevershow
 
-VIProductVersion "1.0.1.0"
+VIProductVersion "1.0.2.0"
 VIAddVersionKey /LANG=1042 "ProductName" "${APPNAME}"
 VIAddVersionKey /LANG=1042 "FileDescription" "${APPNAME} 설치 프로그램"
 VIAddVersionKey /LANG=1042 "CompanyName" "${PUBLISHER}"

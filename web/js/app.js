@@ -5,9 +5,9 @@ import { EQ_PRESETS, SOUND_PRESETS } from './presets.js';
 import { readTags } from './tags.js';
 import { platform } from './platform.js';
 import { ICONS, icon } from './icons.js';
-import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO } from './lyrics.js';
+import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO, LookupError } from './lyrics.js';
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const $ = id => document.getElementById(id);
 const app = $('app');
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -929,9 +929,10 @@ async function localLyrics(t) {
   if (info && info.lyrics) { const l = toLyrics(info.lyrics, 'tag'); if (l.lines.length) return l; }
   return null;
 }
-async function loadLyrics(t, { force = false } = {}) {
+async function loadLyrics(t, { force = false, retry = false } = {}) {
+  if (lyRetry) lyRetry();
   const tok = ++LY.tok;
-  LY.key = t ? t.key : null; LY.data = null; LY.idx = -1; LY.form = false; LY.fix = null; LY.prev = null;
+  LY.key = t ? t.key : null; LY.data = null; LY.idx = -1; LY.form = false; LY.fix = null; LY.prev = null; LY.slow = false;
   if (!t) { LY.state = 'idle'; renderLyrics(); return; }
   LY.state = 'loading'; renderLyrics();
   const show = (data, state) => { if (tok !== LY.tok) return; LY.data = data; LY.state = state || (!data ? 'none' : data.instrumental ? 'instrumental' : 'ok'); renderLyrics(); };
@@ -944,6 +945,9 @@ async function loadLyrics(t, { force = false } = {}) {
   const a = engine.deck.a;
   const dur = engine.deck.track === t && isFinite(a.duration) && a.duration > 0 ? a.duration : (t.duration || 0);
   const mine = c && c.none && c.manual ? c : null;   // 내가 '틀렸다'고만 알린 곡
+  const stale = () => tok !== LY.tok;
+  // 가사 화면을 안 보고 있으면 곡을 빨리 넘길 때 요청이 쌓이지 않게 잠깐 기다렸다가 찾는다
+  if (!force && (!$('paneLyr') || $('paneLyr').hidden)) { await new Promise(r => setTimeout(r, 2500)); if (stale()) return; }
   try {
     // 3) 다른 사용자들이 고른 가사 (GitHub 의 공용 목록, 6시간마다 새로 받음)
     await loadOverrides();
@@ -952,7 +956,7 @@ async function loadLyrics(t, { force = false } = {}) {
     if (com && com.pick === 0 && !mine) return show({ instrumental: true, synced: false, lines: [], raw: '', source: 'community' });
     if (com && com.pick && !(mine && mine.wrong === com.pick)) {
       if (c && !c.none && c.match && Number(c.match.id) === com.pick) return show({ ...c, source: 'community' });
-      const l = await getById(com.pick);
+      const l = await getById(com.pick, { stale });
       if (tok !== LY.tok) return;
       if (l) { l.source = 'community'; if (!mine) cachePut(t.key, l); return show(l); }
     }
@@ -962,14 +966,27 @@ async function loadLyrics(t, { force = false } = {}) {
     if (c && !c.none && !(c.match && wrong.includes(Number(c.match.id)))) return show(c);
     if (c && c.none) return show(null, 'none');
     // 5) 자동 검색
-    const res = await findOnline(q, dur, wrong);
+    const res = await findOnline(q, dur, wrong, { stale, onBusy: () => { if (!stale() && LY.state === 'loading') { LY.slow = true; renderLyrics(); } } });
     if (tok !== LY.tok) return;
-    cachePut(t.key, res);
+    cachePut(t.key, res);          // 끝까지 찾았을 때만 여기 온다 (없으면 '없음'으로 하루 기억)
     show(res);
   } catch (e) {
-    if (tok !== LY.tok) return;
-    show(null, 'error');
+    if (tok !== LY.tok || (e instanceof LookupError && e.kind === 'stale')) return;
+    const kind = e instanceof LookupError ? e.kind : 'busy';
+    show(null, kind === 'offline' || navigator.onLine === false ? 'offline' : 'busy');
+    retryLyricsLater(t, tok, LY.state);
   }
+}
+/** 서버가 붐비면 잠시 뒤, 인터넷이 끊겼으면 다시 연결될 때 같은 곡이면 자동으로 다시 찾는다 */
+let lyRetry = null;
+function retryLyricsLater(t, tok, state) {
+  if (lyRetry) lyRetry();
+  const again = () => { cancel(); if (tok === LY.tok && list[P.index] === t) loadLyrics(t, { retry: true }); };
+  const timer = setTimeout(again, state === 'offline' ? 60000 : 30000);
+  const onOnline = () => setTimeout(again, 1500);
+  window.addEventListener('online', onOnline);
+  const cancel = () => { clearTimeout(timer); window.removeEventListener('online', onOnline); lyRetry = null; };
+  lyRetry = cancel;
 }
 const fmtSrc = d => !d ? '' : d.source === 'lrc' ? '.lrc 파일' : d.source === 'tag' ? '음악 파일에 들어 있는 가사'
   : d.source === 'community' ? '다른 사용자들이 고른 가사' + (d.synced ? ' · 싱크' : '') : d.source === 'manual' ? '내가 고른 가사' + (d.synced ? ' · 싱크' : '')
@@ -991,11 +1008,14 @@ function renderLyrics() {
   const msg = (text, ...extra) => el('div', { class: 'lystate' }, el('div', {}, text), ...extra);
   const online = LY.data && ONLINE.includes(LY.data.source);
   if (!t) kids.push(msg('재생 중인 곡이 없어요'));
-  else if (LY.state === 'loading') kids.push(msg('가사를 찾는 중이에요…'));
+  else if (LY.state === 'loading') kids.push(LY.slow ? msg('가사 서버(LRCLIB)가 붐벼서 조금 오래 걸리고 있어요…', el('div', { class: 'hint' }, '잠깐씩 기다렸다가 다시 물어보는 중이에요')) : msg('가사를 찾는 중이에요…'));
   else if (LY.state === 'manual') kids.push(msg('저장된 가사가 없어요', el('button', { class: 'btn', onclick: () => loadLyrics(t, { force: true }) }, icon('search'), '인터넷에서 찾기')));
   else if (LY.state === 'none') kids.push(msg('가사를 찾지 못했어요', el('div', { class: 'hint' }, '제목이나 가수 이름을 바꿔서 직접 검색해 보세요.' + (S.lyrShare ? ' 맞는 가사를 고르면 다른 사용자들에게도 그 가사가 나와요.' : '')),
     el('div', { class: 'tools' }, el('button', { class: 'btn', onclick: () => openLyricsForm(null) }, icon('search'), '직접 검색'), el('button', { class: 'btn ghost', onclick: () => { cacheDrop(t.key); loadLyrics(t, { force: true }); } }, '다시 찾기'))));
-  else if (LY.state === 'error') kids.push(msg('인터넷에 연결할 수 없어 가사를 가져오지 못했어요', el('button', { class: 'btn', onclick: () => loadLyrics(t, { force: true }) }, '다시 시도')));
+  else if (LY.state === 'offline') kids.push(msg('인터넷에 연결되어 있지 않아요', el('div', { class: 'hint' }, '연결되면 자동으로 다시 찾아요'),
+    el('button', { class: 'btn', onclick: () => loadLyrics(t, { force: true }) }, '다시 시도')));
+  else if (LY.state === 'busy') kids.push(msg('가사 서버(LRCLIB)가 지금 붐벼서 가사를 가져오지 못했어요', el('div', { class: 'hint' }, '30초 뒤 자동으로 다시 찾아볼게요'),
+    el('button', { class: 'btn', onclick: () => loadLyrics(t, { force: true }) }, '지금 다시 시도')));
   else if (LY.state === 'instrumental') {
     kids.push(msg(LY.data && LY.data.match ? '연주곡이에요 — 가사가 없어요' : '가사가 없는 곡이에요'));
     if (online) kids.push(lyricsFooter());
@@ -1066,9 +1086,13 @@ function lyricsForm(t) {
     if (!qq.title) { ti.focus(); return; }
     res.replaceChildren(el('div', { class: 'hint' }, '검색 중…'));
     let arr;
-    try { arr = await searchList(qq); } catch (e) { res.replaceChildren(el('div', { class: 'hint' }, '인터넷에 연결할 수 없어요')); return; }
+    try { arr = await searchList(qq); } catch (e) {
+      res.replaceChildren(el('div', { class: 'hint' }, e instanceof LookupError && e.kind === 'offline' ? '인터넷에 연결되어 있지 않아요' : '가사 서버(LRCLIB)가 지금 붐벼요. 잠시 후 다시 눌러 주세요'));
+      return;
+    }
     if (!arr.length) { res.replaceChildren(el('div', { class: 'hint' }, '검색 결과가 없어요')); return; }
     const wrongIds = new Set([...(communityFor(q) || { wrong: [] }).wrong, ...(LY.fix && LY.fix.wrongId ? [LY.fix.wrongId] : [])]);
+    arr = [...arr.filter(r => !wrongIds.has(r.id)), ...arr.filter(r => wrongIds.has(r.id))];   // 틀렸다고 한 가사는 맨 아래로
     res.replaceChildren(...arr.slice(0, 12).map(r => el('button', {
       class: 'lyr' + (wrongIds.has(r.id) ? ' bad' : ''), onclick: () => {
         const fix = LY.fix, prev = LY.prev || {};

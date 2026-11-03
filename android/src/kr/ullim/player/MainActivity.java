@@ -186,9 +186,12 @@ public class MainActivity extends Activity {
                 c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
                 c.setConnectTimeout(10000);
                 c.setReadTimeout(15000);
-                c.setRequestProperty("User-Agent", "Ullim/" + appVersion + " (Android music player; lrclib client)");
+                // LRCLIB 요청 규칙: 앱 이름 · 버전 · 프로젝트 주소
+                c.setRequestProperty("User-Agent", "Ullim v" + appVersion + " (https://github.com/omokdie/ullim)");
                 c.setRequestProperty("Accept", "application/json");
                 int code = c.getResponseCode();
+                String ra = c.getHeaderField("Retry-After");
+                if (ra != null) o.put("retryAfter", ra);
                 InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
                 java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                 if (in != null) {
@@ -200,7 +203,10 @@ public class MainActivity extends Activity {
                 o.put("status", code);
                 o.put("body", new String(bos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
             } catch (Exception e) {
-                try { o.put("status", 0); o.put("body", ""); } catch (Exception ignored) { /* noop */ }
+                // 시간 초과(서버가 느림)와 연결 안 됨(인터넷 끊김)을 구분해 알려 준다
+                String kind = e instanceof java.net.SocketTimeoutException ? "timeout"
+                    : (e instanceof java.net.UnknownHostException || e instanceof java.net.NoRouteToHostException) ? "offline" : "network";
+                try { o.put("status", 0); o.put("body", ""); o.put("error", kind); } catch (Exception ignored) { /* noop */ }
             } finally {
                 if (c != null) c.disconnect();
             }

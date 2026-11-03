@@ -196,13 +196,18 @@ ipcMain.handle('http-get', async (_e, url) => {
   else return { status: 400, body: '' };
   try {
     const r = await net.fetch(target, {
-      headers: { 'User-Agent': `Ullim/${app.getVersion()} (Windows music player; lrclib client)`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(12000),
+      // LRCLIB 요청 규칙: 앱 이름 · 버전 · 프로젝트 주소
+      headers: { 'User-Agent': `Ullim v${app.getVersion()} (https://github.com/omokdie/ullim)`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(15000),
     });
     const body = await r.text();
-    return { status: r.status, body: body.length > 4e6 ? '' : body };
+    return { status: r.status, body: body.length > 4e6 ? '' : body, retryAfter: r.headers.get('retry-after') };
   } catch (e) {
-    return { status: 0, body: '' };
+    // 시간 초과(서버가 느림)와 연결 안 됨(인터넷 끊김)을 구분해 알려 준다
+    const m = String((e && (e.name + ' ' + e.message)) || '');
+    const error = /Timeout|Abort/i.test(m) ? 'timeout'
+      : /INTERNET_DISCONNECTED|NAME_NOT_RESOLVED|NETWORK_CHANGED|ADDRESS_UNREACHABLE|NETWORK_ACCESS_DENIED/i.test(m) ? 'offline' : 'network';
+    return { status: 0, body: '', error };
   }
 });
 /* 고른 가사 알리기: 이 메시지함 주소에만, 작은 글만 보낸다 (web/js/lyrics.js 의 FEEDBACK_URL) */

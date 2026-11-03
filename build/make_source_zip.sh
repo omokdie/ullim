@@ -2,7 +2,7 @@
 # 소스 묶음 (빌드 결과 · 내려받은 도구 · 테스트 음원 제외)
 set -euo pipefail
 cd /home/claude
-OUT=/home/claude/ullim/dist/Ullim-1.0.1-source.zip
+OUT=/home/claude/ullim/dist/Ullim-1.0.2-source.zip
 rm -f "$OUT"
 zip -q -r -X "$OUT" \
   ullim/README.md ullim/web ullim/desktop ullim/android ullim/assets \

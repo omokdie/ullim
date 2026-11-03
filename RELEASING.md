@@ -42,6 +42,7 @@ python3 test/run_dsp.py                        # 음장 효과 측정
 python3 test/ui_func.py                        # 화면 동작
 python3 test/lyrics_test.py                    # 가사 찾기 (LRCLIB 가짜 응답)
 python3 test/lyrics_share_test.py              # 공용 가사 목록 · 자동 의견 보내기 (가짜 응답)
+python3 test/lyrics_retry_test.py              # 가사 서버가 붐빌 때(503/429) 다시 묻기 · 괄호 이름 · 가수 별칭 · 받아들일지 규칙
 python3 .github/scripts/lyrics_feedback.py selftest
 python3 test/lyrics_bot_test.py                # 가사 봇 전체 흐름 (가짜 GitHub · LRCLIB · ntfy)
 python3 test/android_bridge.py                 # 안드로이드 연결층 흉내

@@ -9,13 +9,14 @@ const http = require('http');
     req.on('end', () => {
       got.push({ method: req.method, url: req.url, ua: req.headers['user-agent'], body });
       if (req.url.startsWith('/ovr/overrides.json')) { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('{"version":1,"songs":{"a|b":{"pick":5}}}'); return; }
+      if (req.url.startsWith('/lrclib/search')) { res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '1' }); res.end('{"name":"ServerOverloaded"}'); return; }
       res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"id":"x"}');
     });
   }).listen(0, '127.0.0.1');
   await new Promise(r => srv.on('listening', r));
   const base = `http://127.0.0.1:${srv.address().port}`;
   const app = await electron.launch({ executablePath: process.argv[2], args: [process.argv[3], '--no-sandbox'],
-    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1', ULLIM_FEEDBACK_URL: base + '/feed', ULLIM_OVERRIDES_BASE: base + '/ovr/' } });
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1', ULLIM_FEEDBACK_URL: base + '/feed', ULLIM_OVERRIDES_BASE: base + '/ovr/', ULLIM_LYRICS_BASE: base + '/lrclib/' } });
   const win = await app.firstWindow();
   await win.waitForFunction(() => window.__ullim && window.__ullim.engine, null, { timeout: 15000 });
   const r = await win.evaluate(async () => {
@@ -25,6 +26,7 @@ const http = require('http');
     out.postBig = await N.httpPost('https://ntfy.sh/ullim-lyrics-259gyx3gfnw7', 'x'.repeat(5000));
     out.get = await N.httpGet('https://raw.githubusercontent.com/omokdie/ullim/main/lyrics/overrides.json?t=1');
     out.getOther = await N.httpGet('https://raw.githubusercontent.com/someone/else/main/x.json');
+    out.busy = await N.httpGet('https://lrclib.net/api/search?q=x');
     const L = await import('./js/lyrics.js');
     localStorage.removeItem('ullim.lyrovr.v1');
     out.ovr = await L.loadOverrides(true);
