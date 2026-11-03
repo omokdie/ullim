@@ -35,8 +35,12 @@
 Electron IPC(허용/거부 주소 · 크기 제한), 기존 가사 · 안드로이드 브리지 시험, APK 서명 키가 1.0.0 과 같음.
 
 ### 릴리스
-이 클라우드 세션은 GitHub **릴리스 만들기가 막혀 있음**(API 403 "not permitted for this session type"). 코드 push · 이슈 · 라벨 · 워크플로 실행은 됨.
-→ 설치 파일 · APK 는 세션에서 빌드해 사용자에게 파일로 전달하고, 사용자가 웹에서 릴리스를 만듦(`RELEASING.md` "릴리스").
+이 클라우드 세션은 GitHub **릴리스 만들기 · 브랜치/태그 삭제가 막혀 있음**(API 403). 코드 push · 이슈 · 라벨 · 워크플로 실행은 됨.
+v1.0.1 은 사용자 허락을 받아 **사용자 PC 의 Claude 앱 브라우저**(사용자가 GitHub 로그인)로 만들었음:
+1. 파일을 임시 브랜치에 27MB 조각으로 push (설치 파일 104MB 는 한 파일로 못 올림: GitHub 100MB 제한, 장치 전송 30MB 제한)
+2. 릴리스 작성 페이지에서 JS 로 `raw.githubusercontent.com/<커밋>/…` 조각을 받아 합치고 SHA-256 확인 → `file-attachment.attach(DataTransfer)` 로 첨부
+3. 태그 `v1.0.1`(main) · 제목 · 설명 입력 → Publish. 공개 다운로드 APK 해시가 빌드와 같음을 확인.
+임시 브랜치 `release-upload-tmp` 는 이 세션에서 지울 수 없어 남아 있음(사용자 확인 후 웹에서 삭제).
 APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관용으로 전달함 — 다음 버전 APK 빌드 때 `android/keystore/` 에 다시 넣어야 함.
 
 ## 4. 남은 일 · 아이디어
