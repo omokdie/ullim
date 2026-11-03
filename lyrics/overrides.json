@@ -1,5 +1,11 @@
 {
- "version": 1,
- "updated": "",
- "songs": {}
+ "meta": {
+  "ntfy": {
+   "ids": [],
+   "time": 0
+  }
+ },
+ "songs": {},
+ "updated": "2026-11-03T15:57:00Z",
+ "version": 1
 }
