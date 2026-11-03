@@ -53,5 +53,9 @@ xvfb-run -a node test/electron_ipc_test.js <electron> build/desktop-app   # 가�
 
 1. 위 순서로 빌드하고 시험.
 2. main 에 커밋 · 푸시.
-3. GitHub **Releases → Draft a new release** → 태그 `v<버전>` (대상 main) → `Ullim-Setup-<버전>.exe`, `Ullim-<버전>.apk` 첨부 → 게시.
+3. GitHub 저장소 → **Releases → Draft a new release** → **Choose a tag** 에 `v<버전>` 입력 후 *Create new tag* (대상 main)
+   → 제목 · 설명 → `Ullim-Setup-<버전>.exe`, `Ullim-<버전>.apk` 를 끌어다 놓기 → **Publish release**.
    README 의 "최신 릴리스" 링크가 자동으로 새 버전을 가리킵니다.
+
+APK 서명 키(`android/keystore/`)는 저장소에 없으니, 새 작업 환경에서 APK 를 빌드할 때는 보관해 둔 키 파일 두 개를 그 폴더에 다시 넣어야 합니다.
+(키 없이 빌드하면 새 키가 만들어져, 기존 사용자는 앱을 지우고 다시 설치해야 합니다)

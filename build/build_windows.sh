@@ -10,6 +10,8 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$EZIP" "$OUT"
 mv "$OUT/electron.exe" "$OUT/Ullim.exe"
 rm -f "$OUT/resources/default_app.asar"
+# 화면 언어 파일은 한국어 · 영어만 남김 (약 50MB 절약)
+find "$OUT/locales" -name '*.pak' ! -name 'ko.pak' ! -name 'en-US.pak' -delete
 bash "$ROOT/build/stage_desktop.sh" "$OUT/resources/app" >/dev/null
 python3 "$ROOT/build/pe_patch.py" "$OUT/Ullim.exe" "$ROOT/assets/exe_256.png"
 python3 - "$OUT/README.txt" "$VER" <<'PY'
