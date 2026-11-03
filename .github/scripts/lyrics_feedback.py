@@ -370,8 +370,9 @@ def ntfy_messages():
 def apply_app_messages(data, msgs, fetch, todo, today=None):
     """앱 의견을 시간 순으로 반영. 어디까지 읽었는지(meta.ntfy)를 기억해 같은 의견을 두 번 세지 않는다.
     LRCLIB 이 안 되면 거기서 멈추고 다음 번에 이어서 한다."""
-    cur = data.setdefault('meta', {}).setdefault('ntfy', {'time': 0, 'ids': []})
-    t0, seen = cur.get('time', 0), set(cur.get('ids', []))
+    old = (data.get('meta') or {}).get('ntfy') or {'time': 0, 'ids': []}
+    cur = {'time': old.get('time', 0), 'ids': list(old.get('ids', []))}
+    t0, seen = cur['time'], set(cur['ids'])
     per, done = {}, 0
     for j in msgs:
         t, mid = j.get('time', 0), j.get('id', '')
@@ -398,10 +399,12 @@ def apply_app_messages(data, msgs, fetch, todo, today=None):
                         data['reviews'][pair] = today or datetime.date.today().isoformat()
                         title = f"[가사 확인] {rep['artist'] + ' - ' if rep['artist'] else ''}{rep['song']} → LRCLIB #{rep['correct_id']}"
                         todo.append({'type': 'review_issue', 'title': title[:200], 'body': review_body(rep, voter, msg)})
-        if t > cur.get('time', 0):
+        if t > cur['time']:
             cur['time'], cur['ids'] = t, []
         cur['ids'].append(mid)
         done += 1
+    if done:                                   # 새로 읽은 게 있을 때만 기록 (없으면 파일을 건드리지 않음)
+        data.setdefault('meta', {})['ntfy'] = cur
     return done
 
 
