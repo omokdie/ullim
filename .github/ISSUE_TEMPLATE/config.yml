@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 가사 데이터베이스 LRCLIB
+    url: https://lrclib.net
+    about: 가사 자체가 틀렸다면(오타·싱크 어긋남) LRCLIB 에서 직접 고칠 수 있어요.

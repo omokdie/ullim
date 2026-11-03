@@ -1,0 +1,44 @@
+name: 가사 제보
+description: 곡에 엉뚱한 가사가 나오거나 가사를 못 찾을 때 GitHub 에서 직접 알려 주세요.
+title: "[가사] "
+labels: ["lyrics"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **앱에서는 이 양식이 필요 없어요.** 가사 화면에서 직접 검색하거나 '틀린 가사 제보'로 맞는 가사를 고르면 자동으로 알려져요.
+        이 양식은 앱 밖에서 알리고 싶을 때 써요. 제보는 몇 분 안에 자동으로 확인돼 공용 목록에 들어가고, 모든 사용자의 앱이 몇 시간 안에 새 목록을 받아요.
+        같은 곡에 여러 사람이 서로 다른 가사를 고르면 더 많이 고른 쪽을 써요. (가사 번호는 [LRCLIB](https://lrclib.net) 의 번호예요)
+  - type: input
+    id: song
+    attributes:
+      label: 노래 제목
+    validations:
+      required: true
+  - type: input
+    id: artist
+    attributes:
+      label: 가수
+  - type: input
+    id: duration
+    attributes:
+      label: 곡 길이(초)
+  - type: input
+    id: wrong_id
+    attributes:
+      label: 틀린 가사 번호
+      description: 앱에 잘못 나온 가사의 LRCLIB 번호. 모르면 비워 두세요.
+  - type: input
+    id: correct_id
+    attributes:
+      label: 맞는 가사 번호
+      description: 맞는 가사의 LRCLIB 번호. 가사가 없는 곡이면 none, 모르면 비워 두세요.
+  - type: textarea
+    id: note
+    attributes:
+      label: 하고 싶은 말
+      description: 선택 사항이에요.
+  - type: input
+    id: app_version
+    attributes:
+      label: 앱 버전

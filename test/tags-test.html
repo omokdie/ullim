@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>tags</title>
+<script type="module">
+import { readTags } from '../web/js/tags.js';
+const files = ['song_cbr_v23.mp3', 'song_vbr_v24.mp3', 'song_euckr.mp3', 'song.flac', 'song.m4a', 'song_alac.m4a', 'song.opus', 'song.wav'];
+window.runTags = async () => {
+  const out = {};
+  for (const f of files) {
+    try {
+      const t0 = performance.now();
+      const info = await readTags('/media?p=' + encodeURIComponent('/home/claude/ullim/test/media/' + f));
+      out[f] = { title: info.title, artist: info.artist, album: info.album, track: info.track, duration: +info.duration.toFixed(2),
+        pic: info.picture ? `${info.picture.mime} ${info.picture.data.length}B` : null, ms: Math.round(performance.now() - t0) };
+    } catch (e) { out[f] = { error: String(e && e.stack || e) }; }
+  }
+  return out;
+};
+window.__ready = true;
+</script>

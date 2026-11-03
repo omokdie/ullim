@@ -1,0 +1,71 @@
+# 고른 가사 의견 → lyrics/overrides.json (앱들이 받아 가는 공용 가사 목록)
+#  - 앱이 자동으로 보내는 의견: ntfy.sh 공개 메시지함(12시간 보관) → 30분마다 모아서 반영
+#  - GitHub 이슈 양식(.github/ISSUE_TEMPLATE/lyrics.yml)으로 쓴 제보: 이슈가 열리거나 라벨이 붙으면 바로 반영 → 이슈 닫기
+# 한 번 돌 때 새 의견과 열린 제보를 모두 처리하므로, 일부 실행이 건너뛰어져도 다음 실행이 이어서 처리한다.
+name: 가사 의견 반영
+
+on:
+  issues:
+    types: [opened, reopened, labeled]
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  actions: write   # 오래 조용해도 예약 실행이 꺼지지 않게 (아래 '예약 실행 유지')
+
+concurrency:
+  group: lyrics-feedback
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: >-
+      github.event_name != 'issues' ||
+      startsWith(github.event.issue.title, '[가사]') ||
+      contains(github.event.issue.labels.*.name, 'lyrics')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 시험
+        run: python3 .github/scripts/lyrics_feedback.py selftest
+
+      - name: 열린 제보 읽고 목록 갱신
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/scripts/lyrics_feedback.py apply "$RUNNER_TEMP/lyrics-actions.json"
+
+      - name: 목록 올리기
+        run: |
+          if git diff --quiet -- lyrics/overrides.json; then
+            echo "바뀐 내용 없음"
+            exit 0
+          fi
+          git config user.name "ullim-lyrics-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lyrics/overrides.json
+          git commit -m "가사 제보 반영"
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase origin "${GITHUB_REF_NAME:-main}"
+          done
+          exit 1
+
+      - name: 제보에 결과 알리기
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/scripts/lyrics_feedback.py report "$RUNNER_TEMP/lyrics-actions.json"
+
+      # 공개 저장소의 예약 실행은 60일 동안 저장소에 변화가 없으면 꺼진다 → 스스로 다시 켜 둔다
+      - name: 예약 실행 유지
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/lyrics-feedback.yml/enable"

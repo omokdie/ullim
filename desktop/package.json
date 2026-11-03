@@ -1,0 +1,8 @@
+{
+  "name": "ullim",
+  "productName": "Ullim",
+  "version": "1.0.1",
+  "description": "울림 — 무료 음장 효과를 모은 심플한 음악 플레이어",
+  "main": "main.js",
+  "license": "MIT"
+}

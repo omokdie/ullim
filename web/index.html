@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko" data-theme="dark" data-accent="blue">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' blob: data: https://lrclib.net https://raw.githubusercontent.com https://ntfy.sh; worker-src 'self' blob:">
+<title>울림</title>
+<link rel="icon" href="img/icon.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app" id="app" data-tab="fx">
+  <header class="player card">
+    <div class="art" id="art"><span class="i" data-icon="note"></span><img id="artImg" alt="" hidden></div>
+    <div class="meta">
+      <div class="title" id="title">재생할 음악을 추가하세요</div>
+      <div class="sub" id="sub">파일이나 폴더를 열거나, 창에 끌어다 놓으세요</div>
+    </div>
+    <div class="seek">
+      <span id="cur" class="num">0:00</span>
+      <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="재생 위치">
+      <span id="dur" class="num">0:00</span>
+    </div>
+    <div class="ctrl">
+      <button class="ib" id="btnShuffle" title="무작위 재생" aria-label="무작위 재생"></button>
+      <button class="ib big" id="btnPrev" title="이전 곡" aria-label="이전 곡"></button>
+      <button class="play" id="btnPlay" title="재생 / 일시정지 (Space)" aria-label="재생"></button>
+      <button class="ib big" id="btnNext" title="다음 곡" aria-label="다음 곡"></button>
+      <button class="ib" id="btnRepeat" title="반복" aria-label="반복"></button>
+    </div>
+    <div class="vol">
+      <button class="ib" id="btnMute" title="음소거" aria-label="음소거"></button>
+      <input type="range" id="vol" min="0" max="100" value="80" aria-label="볼륨">
+    </div>
+    <canvas class="viz" id="viz" aria-hidden="true"></canvas>
+  </header>
+
+  <section class="listpane card" id="listPane">
+    <div class="phead">
+      <h2>재생목록</h2><span class="count num" id="listCount"></span><span class="sp"></span>
+      <button class="ib" id="btnSearch" title="검색" aria-label="검색"></button>
+      <button class="ib" id="btnListMenu" title="더보기" aria-label="더보기"></button>
+    </div>
+    <div class="tools" id="listTools"></div>
+    <label class="search" id="searchBox" hidden><span class="i" data-icon="search"></span><input type="text" id="searchInput" placeholder="제목, 가수, 앨범 검색" autocomplete="off"></label>
+    <div class="vlist" id="vlist"><div class="spacer" id="spacer"></div></div>
+    <div class="empty" id="empty" hidden></div>
+  </section>
+
+  <section class="sidepane card" id="sidePane">
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="fx">음장 효과 <span class="badge" id="fxBadge" hidden></span></button>
+      <button class="tab" role="tab" data-tab="eq">이퀄라이저</button>
+      <button class="tab" role="tab" data-tab="lyr">가사</button>
+      <button class="tab" role="tab" data-tab="set">설정</button>
+    </nav>
+    <div class="pane" id="paneFx"></div>
+    <div class="pane" id="paneEq" hidden></div>
+    <div class="pane lypane" id="paneLyr" hidden></div>
+    <div class="pane" id="paneSet" hidden></div>
+  </section>
+
+  <nav class="btabs" role="tablist">
+    <button data-tab="list" role="tab"><span class="i" data-icon="list"></span>재생목록</button>
+    <button data-tab="fx" role="tab"><span class="i" data-icon="fx"></span>음장<span class="badge" id="fxBadgeM" hidden></span></button>
+    <button data-tab="eq" role="tab"><span class="i" data-icon="eq"></span>EQ</button>
+    <button data-tab="lyr" role="tab"><span class="i" data-icon="lyrics"></span>가사</button>
+    <button data-tab="set" role="tab"><span class="i" data-icon="gear"></span>설정</button>
+  </nav>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# 서명 키 — 절대 올리지 않음 (잃어버리면 앱 업데이트 설치가 안 됨: 따로 안전하게 보관)
+android/keystore/
+*.jks
+*.keystore
+keystore.properties
+
+# 빌드 결과물 (릴리스에 올림)
+dist/
+build/android/
+build/desktop-app/
+build/electron-linux/
+build/win/
+__pycache__/
+*.pyc
+
+# 시험 결과 · 큰 시험 파일
+test/shots/
+test/shots2x/
+test/media/src.wav
+test/media/song.wav
+*.idsig
+.DS_Store
+Thumbs.db
