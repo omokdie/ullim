@@ -1,0 +1,28 @@
+# 가사 의견 메시지함(ntfy.sh) 점검 — Actions → "가사 메시지함 점검" → Run workflow
+# 점검용 메시지({"v":0,...})를 보내고 다시 읽어 본다. 가사 봇은 v 가 1 이 아닌 메시지를 무시한다.
+name: 가사 메시지함 점검
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 점검 메시지 보내고 다시 읽기
+        run: |
+          TOPIC=https://ntfy.sh/ullim-lyrics-259gyx3gfnw7
+          ID=$(curl -fsS -H "Content-Type: text/plain; charset=utf-8" -d '{"v":0,"ping":"healthcheck"}' "$TOPIC" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+          echo "보낸 점검 메시지: $ID"
+          for i in 1 2 3 4 5; do
+            sleep 3
+            if curl -fsS "$TOPIC/json?poll=1&since=all" | grep -q "\"id\":\"$ID\""; then
+              echo "메시지함 정상 — 보내기 · 읽기 모두 됨"
+              exit 0
+            fi
+          done
+          echo "보낸 메시지를 다시 읽지 못함"
+          exit 1
