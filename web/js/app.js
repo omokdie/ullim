@@ -2280,7 +2280,7 @@ async function renderOutput() {
   const o = OUT.info;
   if (platform.name === 'android' && o) {
     const d = o.out || {}, name = OUT_NAMES[d.type] || '출력 장치';
-    outLine = name + (d.name && d.type !== 'speaker' ? ` (${d.name})` : '');
+    outLine = name + (d.name && d.type !== 'speaker' && !d.name.includes(name) ? ` (${d.name})` : '');
     if (d.type === 'usb') {
       if (o.mixer) outLine += ` · ${o.mixer.bits}bit${o.mixer.float ? ' 실수' : ''} · ${kHz(o.mixer.rate)}`;
       outHint = !o.hires ? '안드로이드 14 이상에서는 DAC가 받는 최고 품질로 내보낼 수 있어요' : o.mode === 'off' ? '안드로이드 기본 형식으로 내보내요' : o.mixer ? 'DAC가 받는 최고 품질로 내보내요' : '이 DAC는 형식을 바꿀 수 없어요 (안드로이드 기본)';
