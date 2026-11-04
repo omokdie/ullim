@@ -1,15 +1,15 @@
 {
-  "version": "1.2.1",
-  "notes": "리퀴드 글라스 로고 · 휴대폰에서 좌우로 밀어 화면 옮기기 · 재생 중 테두리 잘림 수정",
+  "version": "1.2.2",
+  "notes": "새 그라데이션 아이콘(밝은 화면 흰 바탕 · 어두운 화면 검은 바탕), 재생 버튼이 울림 표시로 — 재생 중 물결이 움직이고 멈추면 세모로 바뀌어요",
   "windows": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.1/Ullim-Setup-1.2.1.exe",
-    "sha256": "a7a5175e54d7768693d1160306ecbdc2efb006644d01f3628d2453cf222cd195",
-    "size": 104799364
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.2/Ullim-Setup-1.2.2.exe",
+    "sha256": "0400427d4024ffe1243f2865a315ac2657b4b933336bd873df3b03bb5de71eed",
+    "size": 104786248
   },
   "android": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.1/Ullim-1.2.1.apk",
-    "sha256": "c2d4d65637b8365a51764fd2034335e35f1bbd5f0b2dee67a9c7e9132e21b935",
-    "size": 863943,
-    "versionCode": 7
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.2/Ullim-1.2.2.apk",
+    "sha256": "39b47148b2ad909b00dbda03a2340e97bd2b74b00f4b2fd40c8907c28578fc08",
+    "size": 630114,
+    "versionCode": 8
   }
 }
