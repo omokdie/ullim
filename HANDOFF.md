@@ -1,6 +1,6 @@
 # 울림 — 작업 인계 문서 (Handoff)
 
-> 갱신: 2026-11-04 KST (1.3.0 준비 — 새 음장 엔진 · 휠 · 재생 속도 · DAC · 코덱). 다음 세션은 이 문서 → `README.md` → `RELEASING.md` → `lyrics/README.md` 순서로 읽으면 됩니다.
+> 갱신: 2026-11-04 KST (1.3.0 게시 — 새 음장 엔진 · 휠 · 재생 속도 · DAC · 코덱. 릴리스 파일: 설치 파일 · APK · FFmpeg 소스). 다음 세션은 이 문서 → `README.md` → `RELEASING.md` → `lyrics/README.md` 순서로 읽으면 됩니다.
 > 소스: **GitHub `omokdie/ullim` (공개, main)**. 클라우드 세션 작업 폴더 `/home/claude/ullim` (origin = 위 저장소).
 
 ## 1. 사용자 요구사항 (반영 상태)
@@ -64,7 +64,7 @@ v1.0.1 은 사용자 허락을 받아 **사용자 PC 의 Claude 앱 브라우저
 2. 릴리스 작성 페이지에서 JS 로 `raw.githubusercontent.com/<커밋>/…` 조각을 받아 합치고 SHA-256 확인 → `file-attachment.attach(DataTransfer)` 로 첨부
 3. 태그 `v1.0.1`(main) · 제목 · 설명 입력 → Publish. 공개 다운로드 APK 해시가 빌드와 같음을 확인.
 임시 브랜치 `release-upload-tmp` 는 이 세션에서 지울 수 없어 남아 있음(사용자 확인 후 웹에서 삭제).
-v1.0.2 ~ v1.2.3 도 같은 방법(임시 브랜치는 매번 부모 없는 커밋 하나로 강제 push — 예전 조각을 받아 오지 않음). 주의할 점 (v1.1.0 때 겪음):
+v1.0.2 ~ v1.3.0 도 같은 방법(임시 브랜치는 매번 부모 없는 커밋 하나로 강제 push — 예전 조각을 받아 오지 않음). 주의할 점 (v1.1.0 때 겪음):
 - 첨부는 `document.querySelector('file-attachment.js-upload-release-file').attach(dt)` — 첫 번째 `file-attachment` 는 설명 칸(그림용)이라 거부됨.
   첨부하면 GitHub 가 untagged 초안을 만들어 파일을 올림(`is-uploading` 클래스가 빠지면 끝).
 - 태그: Tag 버튼 → **Create new tag** → 대화상자에 `v<버전>` → Create (게시할 때 main 에서 만들어짐).
