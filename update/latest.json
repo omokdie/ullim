@@ -1,15 +1,15 @@
 {
-  "version": "1.1.1",
-  "notes": "안드로이드 설치 문제 해결",
+  "version": "1.2.0",
+  "notes": "새 화면(홈 · 리퀴드 글라스) · 한국 노래 가사 더 잘 찾기 · 싱크 없는 가사 자동 맞춤",
   "windows": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.1.1/Ullim-Setup-1.1.1.exe",
-    "sha256": "1466f488208934fb37bc13768700b2afbb315fb52e2cf8fe2c94d3b5596f0f7f",
-    "size": 104461840
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.0/Ullim-Setup-1.2.0.exe",
+    "sha256": "028d205d1a43f6e5bb72caeda001ef45bfb0c60d8b680b22b511c6f65cab0f8a",
+    "size": 104506839
   },
   "android": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.1.1/Ullim-1.1.1.apk",
-    "sha256": "6237627bed5f187fe85d8f7f356a444ba3bb0401811cfeb8bde84a22c365586e",
-    "size": 293519,
-    "versionCode": 5
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.0/Ullim-1.2.0.apk",
+    "sha256": "b224cc1616c9a5ba08b189608f8cc3b0fea2947cbbef59d0550e1df46da38db2",
+    "size": 338783,
+    "versionCode": 6
   }
 }
