@@ -1,0 +1,15 @@
+{
+  "version": "1.1.0",
+  "notes": "플레이리스트 여러 개 · 자동 업데이트",
+  "windows": {
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.1.0/Ullim-Setup-1.1.0.exe",
+    "sha256": "25d46f38c44975862bb88cb8562312b909b9d4eb237979f6a6bfe5a9b25eb482",
+    "size": 104451234
+  },
+  "android": {
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.1.0/Ullim-1.1.0.apk",
+    "sha256": "1bdd90e06796e008a73ecca6e96d52067af1a60c3ce45ad07eb3584db83355fa",
+    "size": 301711,
+    "versionCode": 4
+  }
+}
