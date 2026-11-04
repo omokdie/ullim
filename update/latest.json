@@ -1,15 +1,15 @@
 {
-  "version": "1.2.3",
-  "notes": "더 가볍게(메모리 · 발열 줄이기), 모바일 데이터에서는 가사를 불러오지 않음(설정에서 켜기), 알림에 무작위 · 반복 버튼, 설치 용량 줄이기",
+  "version": "1.3.0",
+  "notes": "끊김 · 지지직 없는 새 음장 엔진, 휠 조절 · 재생 화면 속도 · 음장 버튼, 고음질 출력(DAC), DSD · APE · WavPack · ALAC 등 더 많은 형식 재생",
   "windows": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.3/Ullim-Setup-1.2.3.exe",
-    "sha256": "f4caa39afd5b264b4c1371f6e68f7a107866643ef5ad60bd0fd6d616e54a876c",
-    "size": 95794577
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.3.0/Ullim-Setup-1.3.0.exe",
+    "sha256": "6e33e3369899fe32af056b7e1efd056597cc64ed1827380b519774ea696d5815",
+    "size": 96331948
   },
   "android": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.3/Ullim-1.2.3.apk",
-    "sha256": "59efcca6dac21fd4d63160105aafbfa63ff4be7e785af15dd4bef82f1740dc91",
-    "size": 389216,
-    "versionCode": 9
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.3.0/Ullim-1.3.0.apk",
+    "sha256": "0da1b5c4cf19412db5fdb47cd83a97d134ecbef06a6e8ed42def27ec2a784820",
+    "size": 1106591,
+    "versionCode": 10
   }
 }
