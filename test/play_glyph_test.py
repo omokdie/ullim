@@ -14,10 +14,11 @@ def check(name, ok, info=''):
     R[name] = ok
     if not ok: bad.append(f'{name} {info}')
 
-STATE = '''() => [...document.querySelectorAll('svg.pg')].map(g => ({
+STATE = '''() => [...document.querySelectorAll('.pg')].map(g => ({
   id: g.parentNode.id, t: +g.__t.toFixed(3), ul: g.classList.contains('ul'), on: g.classList.contains('on'),
   label: g.parentNode.getAttribute('aria-label'),
-  w1: getComputedStyle(g.querySelector('.w1')).opacity, anim: getComputedStyle(g.querySelector('.w1 path')).animationName }))'''
+  w1: getComputedStyle(g.querySelector('.pgw.w1')).opacity, anim: getComputedStyle(g.querySelector('.w1 svg')).animationName,
+  layer: getComputedStyle(g.querySelector('.w1 svg')).willChange }))'''
 
 with sync_playwright() as p:
     b = p.chromium.launch(args=['--autoplay-policy=no-user-gesture-required'])
@@ -37,14 +38,14 @@ with sync_playwright() as p:
     s1 = pg.evaluate(STATE)
     check('playing_ullim', all(g['t'] == 1 and g['ul'] and g['on'] for g in s1), s1)
     check('waves_visible', all(float(g['w1']) > 0.95 for g in s1), s1)
-    check('waves_animate', all(g['anim'] == 'pgWave' for g in s1), s1)
+    check('waves_animate', all(g['anim'] == 'pgIn' for g in s1), s1)
     check('label_pause', all(g['label'] == '일시정지' for g in s1), s1)
     R['mid_t'] = [g['t'] for g in mid]
     # 멈춤 → 세모 (모양이 서서히 바뀌는지: 중간 값을 거침)
     pg.click('#btnPlay')
     seen = []
     for _ in range(14):
-        time.sleep(0.04); seen.append(pg.evaluate("document.querySelector('#btnPlay svg.pg').__t"))
+        time.sleep(0.04); seen.append(pg.evaluate("document.querySelector('#btnPlay .pg').__t"))
     time.sleep(0.5)
     s2 = pg.evaluate(STATE)
     check('paused_back', all(g['t'] == 0 and not g['ul'] and not g['on'] for g in s2), s2)
@@ -58,7 +59,7 @@ with sync_playwright() as p:
     if not playing: pg.click('#btnPlay'); time.sleep(0.8)
     # 배터리 절약: 물결 멈춤
     pg.evaluate("document.documentElement.classList.add('saving')"); time.sleep(0.1)
-    check('saving_stops', pg.evaluate("getComputedStyle(document.querySelector('#btnPlay .w1 path')).animationName") == 'none')
+    check('saving_stops', pg.evaluate("getComputedStyle(document.querySelector('#btnPlay .w1 svg')).animationName") == 'none')
     pg.evaluate("document.documentElement.classList.remove('saving')")
 
     # 밝은/어두운 화면 로고
@@ -78,10 +79,10 @@ with sync_playwright() as p:
     # 휴대폰 크기: 미니 플레이어 · 전체 화면 플레이어
     pg.set_viewport_size({'width': 400, 'height': 860}); time.sleep(0.4)
     pg.evaluate("__ullim.S.theme = 'dark'; __ullim.applyTheme && __ullim.applyTheme()")
-    vis = pg.evaluate("(() => { const r = document.querySelector('#btnPlay svg.pg').getBoundingClientRect(); return {w: r.width, h: r.height}; })()")
+    vis = pg.evaluate("(() => { const r = document.querySelector('#btnPlay .pg').getBoundingClientRect(); return {w: r.width, h: r.height}; })()")
     check('mini_visible', vis['w'] >= 20, vis)
     pg.evaluate('__ullim.openPlayer()'); time.sleep(0.7)
-    big = pg.evaluate("(() => { const r = document.querySelector('#pPlay svg.pg').getBoundingClientRect(); return {w: r.width, h: r.height}; })()")
+    big = pg.evaluate("(() => { const r = document.querySelector('#pPlay .pg').getBoundingClientRect(); return {w: r.width, h: r.height}; })()")
     check('big_visible', big['w'] >= 30, big)
     if OUT:
         pg.screenshot(path=f'{OUT}/phone_player.png')

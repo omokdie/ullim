@@ -1,6 +1,7 @@
 /*
  * 울림 — 음악 파일 태그/길이 읽기 (ID3v1/v2, FLAC, Ogg Vorbis/Opus, MP4/M4A, WAV)
  * 파일 전체를 읽지 않고 필요한 부분만 Range 요청으로 읽는다.
+ * readTags(src, { picture: false }): 앨범아트는 읽지 않음 (목록에 곡을 넣을 때 — 그림 바이트를 메모리에 올리지 않게)
  */
 
 const td8 = new TextDecoder('utf-8');
@@ -10,30 +11,43 @@ let tdKr = null, td1252 = null;
 try { tdKr = new TextDecoder('euc-kr', { fatal: true }); } catch (e) { /* noop */ }
 try { td1252 = new TextDecoder('windows-1252'); } catch (e) { td1252 = new TextDecoder('latin1'); }
 
-const HEAD = 256 * 1024;
+const HEAD = 64 * 1024;                  // 처음 읽는 양 (보통 태그 글자는 모두 여기에)
+const BLOCK = 32 * 1024;                 // 작은 읽기는 이만큼 미리 읽어 두고 이어지는 읽기에 씀
 const MAX_TAG = 12 * 1024 * 1024;
 
 /* ---------- reader ---------- */
 async function makeReader(src) {
+  const rd = { size: null, full: null, blocks: [] };       // blocks: 최근에 읽은 조각 2개 { s, buf }
+  let get;
   if (typeof Blob !== 'undefined' && src instanceof Blob) {
-    return { size: src.size, read: async (s, n) => new Uint8Array(await src.slice(s, s + n).arrayBuffer()) };
+    rd.size = src.size;
+    get = async (s, n) => new Uint8Array(await src.slice(s, s + n).arrayBuffer());
+  } else {
+    get = async (s, n) => {
+      const r = await fetch(src, { headers: { Range: `bytes=${s}-${s + n - 1}` } });
+      if (!r.ok && r.status !== 206) throw new Error('HTTP ' + r.status);
+      const buf = new Uint8Array(await r.arrayBuffer());
+      if (r.status === 206) {
+        const m = /\/(\d+)\s*$/.exec(r.headers.get('Content-Range') || '');
+        if (m) rd.size = +m[1];
+        return buf;
+      }
+      rd.full = buf; rd.size = buf.length;                  // Range 를 무시하고 전체를 보낸 경우
+      return buf.subarray(s, s + n);
+    };
   }
-  const rd = { size: null, cache: null, full: null };
   rd.read = async (start, len) => {
     if (start < 0) start = 0;
     if (rd.full) return rd.full.subarray(start, start + len);
-    if (rd.cache && start + len <= rd.cache.length) return rd.cache.subarray(start, start + len);
-    const r = await fetch(src, { headers: { Range: `bytes=${start}-${start + len - 1}` } });
-    if (!r.ok && r.status !== 206) throw new Error('HTTP ' + r.status);
-    const buf = new Uint8Array(await r.arrayBuffer());
-    if (r.status === 206) {
-      const m = /\/(\d+)\s*$/.exec(r.headers.get('Content-Range') || '');
-      if (m) rd.size = +m[1];
-      if (start === 0) rd.cache = buf;
-      return buf;
+    for (const b of rd.blocks) {
+      const end = b.s + b.buf.length;
+      if (start >= b.s && (start + len <= end || (rd.size != null && end >= rd.size && start < end))) return b.buf.subarray(start - b.s, start - b.s + len);
     }
-    rd.full = buf; rd.size = buf.length;
-    return buf.subarray(start, start + len);
+    const buf = await get(start, Math.max(len, BLOCK));
+    if (rd.full) return rd.full.subarray(start, start + len);
+    rd.blocks.unshift({ s: start, buf });
+    if (rd.blocks.length > 2) rd.blocks.pop();
+    return buf.subarray(0, len);
   };
   return rd;
 }
@@ -83,32 +97,59 @@ function unsync(b) {
 }
 
 /* ---------- ID3v2 ---------- */
-function parseID3v2(tag, info) {
+const ID3_22 = { TT2: 'TIT2', TP1: 'TPE1', TAL: 'TALB', TP2: 'TPE2', TRK: 'TRCK', PIC: 'APIC', TLE: 'TLEN', ULT: 'USLT', TCO: 'TCON' };
+const id3Key = id => (id.length === 3 ? ID3_22[id] || id : id);
+function parseID3v2(tag, info, wantPic = true) {
   const ver = tag[3], flags = tag[5];
   let body = tag.subarray(10);
   if ((flags & 0x80) && ver < 4) body = unsync(body);
   let p = 0;
   if (flags & 0x40) p = ver === 4 ? syncsafe(body, 0) : be32(body, 0) + 4;
   const idLen = ver === 2 ? 3 : 4, hdrLen = ver === 2 ? 6 : 10;
-  let pics = [];
+  const pics = [];
   while (p + hdrLen <= body.length) {
     const id = ascii(body, p, idLen);
     if (!/^[A-Z0-9]{3,4}$/.test(id)) break;
-    let size = ver === 2 ? be24(body, p + 3) : ver === 4 ? syncsafe(body, p + 4) : be32(body, p + 4);
+    const size = ver === 2 ? be24(body, p + 3) : ver === 4 ? syncsafe(body, p + 4) : be32(body, p + 4);
     const fflags = ver === 2 ? 0 : body[p + 9];
-    let data = body.subarray(p + hdrLen, p + hdrLen + size);
+    const data = body.subarray(p + hdrLen, p + hdrLen + size);
     p += hdrLen + size;
-    if (size <= 0) continue;
+    if (size > 0) id3Frame(ver, id, fflags, data, info, pics, wantPic);
+  }
+  if (pics.length) info.picture = pics.find(x => x.type === 3) || pics[0];
+}
+/** 큰 태그(그림이 든)를 통째로 읽지 않고 프레임 머리만 보며: 그림 프레임은 건너뛰고 나머지만 읽기 */
+async function readID3Frames(rd, head, tlen, info) {
+  const ver = head[3], flags = head[5];
+  if (((flags & 0x80) && ver < 4) || (flags & 0x40)) {           // 태그 전체 비동기화 · 확장 머리 → 통째로 (드묾)
+    if (tlen <= MAX_TAG) parseID3v2(await rd.read(0, tlen), info, false);
+    return;
+  }
+  const idLen = ver === 2 ? 3 : 4, hdrLen = ver === 2 ? 6 : 10, end = tlen - ((flags & 0x10) ? 10 : 0);
+  const pics = [];
+  for (let p = 10, guard = 0; guard < 500 && p + hdrLen <= end; guard++) {
+    const h = await rd.read(p, hdrLen);
+    if (h.length < hdrLen) break;
+    const id = ascii(h, 0, idLen);
+    if (!/^[A-Z0-9]{3,4}$/.test(id)) break;
+    const size = ver === 2 ? be24(h, 3) : ver === 4 ? syncsafe(h, 4) : be32(h, 4);
+    if (size > 0 && id3Key(id) !== 'APIC' && size <= MAX_TAG && p + hdrLen + size <= end)
+      id3Frame(ver, id, ver === 2 ? 0 : h[9], await rd.read(p + hdrLen, size), info, pics, false);
+    p += hdrLen + size;
+  }
+}
+function id3Frame(ver, id, fflags, data, info, pics, wantPic) {
+  {
     if (ver === 4) {
-      if (fflags & 0x0c) continue;                // compressed / encrypted
+      if (fflags & 0x0c) return;                // compressed / encrypted
       if (fflags & 0x40) data = data.subarray(1);   // grouping id
       if (fflags & 0x01) data = data.subarray(4);   // data length indicator
       if (fflags & 0x02) data = unsync(data);
     } else if (ver === 3) {
-      if (fflags & 0xc0) continue;
+      if (fflags & 0xc0) return;
       if (fflags & 0x20) data = data.subarray(1);
     }
-    const key = id.length === 3 ? ({ TT2: 'TIT2', TP1: 'TPE1', TAL: 'TALB', TP2: 'TPE2', TRK: 'TRCK', PIC: 'APIC', TLE: 'TLEN', ULT: 'USLT', TCO: 'TCON' })[id] || id : id;
+    const key = id3Key(id);
     if (key[0] === 'T' && key !== 'TXXX') {
       const s = clean(decodeText(data[0], data.subarray(1)));
       if (key === 'TIT2') info.title = s;
@@ -123,7 +164,7 @@ function parseID3v2(tag, info) {
       const o = skipString(data, 4, enc);
       const txt = decodeText(enc, data.subarray(o)).replace(/\u0000+$/, '').trim();
       if (txt && (!info.lyrics || txt.length > info.lyrics.length)) info.lyrics = txt;
-    } else if (key === 'APIC') {
+    } else if (key === 'APIC' && wantPic) {
       const enc = data[0];
       let o = 1, mime;
       if (id === 'PIC') { const f = ascii(data, 1, 3).toUpperCase(); mime = f === 'PNG' ? 'image/png' : 'image/jpeg'; o = 4; }
@@ -132,7 +173,6 @@ function parseID3v2(tag, info) {
       if (o < data.length) pics.push({ type, mime, data: data.slice(o) });
     }
   }
-  if (pics.length) info.picture = pics.find(x => x.type === 3) || pics[0];
 }
 
 /* ---------- MPEG audio frame (duration) ---------- */
@@ -144,7 +184,7 @@ const BR = {
   '2-x': [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
 };
 const SRS = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
-function mpegHeader(b, o) {
+export function mpegHeader(b, o) {
   if (b[o] !== 0xff || (b[o + 1] & 0xe0) !== 0xe0) return null;
   const v = (b[o + 1] >> 3) & 3, layer = (b[o + 1] >> 1) & 3, bri = b[o + 2] >> 4, sri = (b[o + 2] >> 2) & 3;
   if (v === 1 || layer === 0 || bri === 0 || bri === 15 || sri === 3) return null;
@@ -202,13 +242,13 @@ function parseFlacPicture(b, o, info) {
 }
 
 /* ---------- FLAC ---------- */
-async function parseFlac(rd, off, info) {
+async function parseFlac(rd, off, info, wantPic = true) {
   let o = off + 4;
   for (let guard = 0; guard < 64; guard++) {
     const h = await rd.read(o, 4);
     if (h.length < 4) break;
     const last = h[0] & 0x80, type = h[0] & 0x7f, len = be24(h, 1);
-    if (type === 0 || type === 4 || type === 6) {
+    if (type === 0 || type === 4 || (type === 6 && wantPic)) {
       if (len > MAX_TAG) break;
       const b = await rd.read(o + 4, len);
       if (type === 0) {
@@ -268,7 +308,7 @@ async function parseOgg(rd, info, size, start = 0) {
 }
 
 /* ---------- MP4 / M4A ---------- */
-async function parseMp4(rd, info, size) {
+async function parseMp4(rd, info, size, wantPic = true) {
   let o = 0;
   const end = size || Infinity;
   let moov = null;
@@ -279,10 +319,35 @@ async function parseMp4(rd, info, size) {
     if (sz === 1) { sz = be32(h, 8) * 4294967296 + be32(h, 12); hdr = 16; }
     else if (sz === 0) sz = end - o;
     if (sz < 8) break;
-    if (type === 'moov') { if (sz <= MAX_TAG) moov = await rd.read(o + hdr, sz - hdr); break; }
+    if (type === 'moov') {
+      if (!wantPic && sz > 256 * 1024) { await walkMp4(rd, o + hdr, o + sz, 0, info, ilstLeaf); return; }   // 큰 moov(앨범아트 · 긴 곡의 표) → 필요한 상자만
+      if (sz <= MAX_TAG) moov = await rd.read(o + hdr, sz - hdr);
+      break;
+    }
     o += sz;
   }
   if (!moov) return;
+  walkMoov(moov, info);
+}
+/** 상자 머리만 읽으며 내려가기: mvhd · ilst 항목만 읽고, 그림(covr) · 표(stbl …)는 건너뜀 */
+async function walkMp4(rd, s, e, depth, info, leaf) {
+  for (let p = s, guard = 0; guard < 2000 && p + 8 <= e; guard++) {
+    const h = await rd.read(p, 16);
+    if (h.length < 8) return;
+    let sz = be32(h, 0), hdr = 8;
+    const t = ascii(h, 4, 4);
+    if (sz === 1) { sz = be32(h, 8) * 4294967296 + be32(h, 12); hdr = 16; }
+    if (sz < 8 || p + sz > e) sz = e - p;
+    if (t === 'udta' || t === 'ilst' || t === 'trak' || t === 'mdia') await walkMp4(rd, p + hdr, p + sz, depth + 1, info, leaf);
+    else if (t === 'meta') await walkMp4(rd, p + hdr + 4, p + sz, depth + 1, info, leaf);
+    else if (t === 'mvhd' || (depth >= 1 && t !== 'covr' && leaf.has(t))) {
+      if (sz <= 1024 * 1024) { const b = await rd.read(p, sz); walkMoov(b, info, t === 'mvhd' ? 0 : 1); }
+    }
+    p += sz;
+  }
+}
+const ilstLeaf = new Set(['\u00a9nam', '\u00a9ART', '\u00a9alb', 'aART', 'trkn', '\u00a9lyr', '\u00a9gen', 'gnre']);
+function walkMoov(moov, info, startDepth = 0) {
   const ilstNames = { '©nam': 'title', '©ART': 'artist', '©alb': 'album', 'aART': 'albumArtist' };
   const walk = (b, s, e, depth) => {
     let p = s;
@@ -317,7 +382,7 @@ async function parseMp4(rd, info, size) {
       p += sz;
     }
   };
-  walk(moov, 0, moov.length, 0);
+  walk(moov, 0, moov.length, startDepth);
 }
 
 /* ---------- WAV ---------- */
@@ -375,7 +440,7 @@ export function cleanGenre(v) {
 }
 
 /* ---------- entry ---------- */
-export async function readTags(src) {
+export async function readTags(src, { picture = true } = {}) {
   const info = { title: '', artist: '', album: '', albumArtist: '', genre: '', track: 0, duration: 0, picture: null, lyrics: '' };
   const rd = await makeReader(src);
   const head = await rd.read(0, HEAD);
@@ -383,16 +448,19 @@ export async function readTags(src) {
   let off = 0;
   if (ascii(head, 0, 3) === 'ID3') {
     const tlen = syncsafe(head, 6) + 10 + ((head[5] & 0x10) ? 10 : 0);
-    const tag = tlen <= head.length ? head.subarray(0, tlen) : (tlen <= MAX_TAG ? await rd.read(0, tlen) : null);
-    if (tag) { try { parseID3v2(tag, info); } catch (e) { /* broken tag */ } }
+    try {
+      if (tlen <= head.length) parseID3v2(head.subarray(0, tlen), info, picture);
+      else if (!picture) await readID3Frames(rd, head, tlen, info);
+      else if (tlen <= MAX_TAG) parseID3v2(await rd.read(0, tlen), info, true);
+    } catch (e) { /* broken tag */ }
     off = tlen;
   }
-  const b = off + 65536 <= head.length ? head.subarray(off) : await rd.read(off, HEAD);
+  const b = off + 16384 <= head.length ? head.subarray(off) : await rd.read(off, 16384);
   const sig = ascii(b, 0, 4);
   try {
-    if (sig === 'fLaC') await parseFlac(rd, off, info);
+    if (sig === 'fLaC') await parseFlac(rd, off, info, picture);
     else if (sig === 'OggS') await parseOgg(rd, info, size, off);
-    else if (ascii(b, 4, 4) === 'ftyp') await parseMp4(rd, info, size);
+    else if (ascii(b, 4, 4) === 'ftyp') await parseMp4(rd, info, size, picture);
     else if (sig === 'RIFF' && ascii(b, 8, 4) === 'WAVE') await parseWav(rd, info, size, b);
     else {
       let hasV1 = false;
@@ -406,10 +474,13 @@ export async function readTags(src) {
           if (!info.genre && t[127] < ID3_GENRES.length) info.genre = cleanGenre(String(t[127]));
         }
       }
-      info.duration = mp3Duration(b, 0, size - off, hasV1) || info.tlen || 0;
+      let d = mp3Duration(b, 0, size - off, hasV1);
+      if (!d && b.length < 65536 && size - off > b.length) d = mp3Duration(await rd.read(off, 65536), 0, size - off, hasV1);   // 첫 프레임이 멀리 있는 파일
+      info.duration = d || info.tlen || 0;
     }
   } catch (e) { /* partial info is fine */ }
   if (!info.artist && info.albumArtist) info.artist = info.albumArtist;
+  if (!picture) info.picture = null;
   delete info.tlen;
   return info;
 }

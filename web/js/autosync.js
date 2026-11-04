@@ -1,12 +1,15 @@
 /*
  * 울림 — 자동 싱크 (싱크 없는 일반 가사에 줄마다 시간 붙이기)
- *   1) 음악을 8000Hz 로 한 번 풀어서 '가운데에서 나오는 중음역 소리'(= 대개 목소리)의 크기를 잰다
+ *   1) 음악을 8000Hz 로 조금씩(chunkdec.js, 약 15초씩) 풀어서 '가운데에서 나오는 중음역 소리'(= 대개 목소리)의 크기를 잰다
+ *      (곡 전체를 한 번에 풀지 않아 메모리를 거의 쓰지 않음 — 예전에는 4분 곡에 순간 100MB 넘게)
  *   2) 줄마다 음절 수로 길이를 어림하고, 목소리가 나오는 구간에 줄이 놓이도록 DP 로 맞춘다
  *   3) 결과는 IndexedDB 에 곡별로 저장 → 다음부터는 계산하지 않는다 (배터리)
  *   사용자가 줄을 눌러 '지금 이 줄' 이라고 알려 주면(기준점) 저장해 둔 목소리 곡선으로 다시 맞춘다 (음악을 다시 풀지 않음)
  *   정확도(JamendoLyrics 79곡): 줄 시작 1초 안 약 26% · 켜진 줄이 실제 줄 ±1줄 안인 시간 약 58% → 화면에는 '대략'으로 보여 주고,
  *   기준점 몇 개면 크게 좋아진다 (6줄마다 하나씩 누르면 1초 안 약 72% · ±1줄 95%) — test/autosync_bench.mjs
  */
+
+import { decodeChunks, Unsupported } from './chunkdec.js';
 
 /* ---------- 글자 → 음절 수 ---------- */
 const VOWELS = /[aeiouyàáâãäåæèéêëìíîïòóôõöøœùúûüýÿ]+/gi;
@@ -49,42 +52,60 @@ function isVocable(text) {
 }
 
 /* ---------- 음악 → 목소리 활동 곡선 ---------- */
-function biquad(x, b0, b1, b2, a1, a2) {          // 제자리 필터 (Direct Form II Transposed)
-  let z1 = 0, z2 = 0;
-  for (let i = 0; i < x.length; i++) {
-    const v = x[i], y = b0 * v + z1;
-    z1 = b1 * v - a1 * y + z2; z2 = b2 * v - a2 * y;
-    x[i] = y;
-  }
-}
-function highpass(x, f0, sr, q) {
-  const w = 2 * Math.PI * f0 / sr, c = Math.cos(w), al = Math.sin(w) / (2 * q), a0 = 1 + al;
-  biquad(x, (1 + c) / 2 / a0, -(1 + c) / a0, (1 + c) / 2 / a0, -2 * c / a0, (1 - al) / a0);
-}
 const FEAT = { hp: 250, frame: 0.02, smooth: 0.2, hop: 0.1, qlo: 0.1, qhi: 0.9, qth: 0.4, scale: 0.25 };
+function hpCoef(f0, sr, q) {                     // 2차 고역 통과 (RBJ)
+  const w = 2 * Math.PI * f0 / sr, c = Math.cos(w), al = Math.sin(w) / (2 * q), a0 = 1 + al;
+  return [(1 + c) / 2 / a0, -(1 + c) / a0, (1 + c) / 2 / a0, -2 * c / a0, (1 - al) / a0];
+}
+/** 조금씩 받은 PCM 으로 목소리 활동 곡선 만들기 — 곡 전체 PCM 을 메모리에 두지 않음 (줄마다 20ms 에너지만 남김).
+    한 번에 다 넣어도(featuresFromPCM) 같은 계산이라 결과가 똑같다 */
+export class FeatStream {
+  constructor(sampleRate, opt = {}) {
+    const o = this.o = { ...FEAT, ...opt };
+    this.step = sampleRate > 12000 ? Math.floor(sampleRate / 8000) : 1;   // 너무 촘촘하면 솎아서 (평균) 계산량을 줄임
+    this.sr = sampleRate / this.step;
+    this.fl = Math.max(1, Math.round(o.frame * this.sr));
+    this.c1 = hpCoef(o.hp, this.sr, 0.5412); this.c2 = hpCoef(o.hp, this.sr, 1.3066);   // 4차 버터워스: 베이스 · 킥 빼기
+    this.z = new Float64Array(8);
+    this.dl = 0; this.dr = 0; this.dn = 0; this.k = 0; this.a = 0; this.b = 0;
+    this.eM = new Float64Array(4096); this.eS = new Float64Array(4096); this.nf = 0;
+  }
+  push(L, R = L) {
+    const fr = Math.fround, z = this.z, step = this.step, fl = this.fl;
+    const [p0, p1, p2, p3, p4] = this.c1, [q0, q1, q2, q3, q4] = this.c2;
+    let { dl, dr, dn, k, a, b } = this;
+    for (let j = 0; j < L.length; j++) {
+      dl += L[j]; dr += R[j];
+      if (++dn < step) continue;
+      // 가운데(L+R) · 옆(L-R) — 4바이트 실수로 저장하던 예전 계산과 같게 반올림
+      let m = fr((dl + dr) / (2 * step)), s = fr((dl - dr) / (2 * step));
+      dl = 0; dr = 0; dn = 0;
+      let y = p0 * m + z[0]; z[0] = p1 * m - p3 * y + z[1]; z[1] = p2 * m - p4 * y; m = fr(y);
+      y = q0 * m + z[2]; z[2] = q1 * m - q3 * y + z[3]; z[3] = q2 * m - q4 * y; m = fr(y);
+      y = p0 * s + z[4]; z[4] = p1 * s - p3 * y + z[5]; z[5] = p2 * s - p4 * y; s = fr(y);
+      y = q0 * s + z[6]; z[6] = q1 * s - q3 * y + z[7]; z[7] = q2 * s - q4 * y; s = fr(y);
+      a += m * m; b += s * s;
+      if (++k === fl) {
+        if (this.nf === this.eM.length) { const g = n => { const x = new Float64Array(n.length * 2); x.set(n); return x; }; this.eM = g(this.eM); this.eS = g(this.eS); }
+        this.eM[this.nf] = a / fl; this.eS[this.nf] = b / fl; this.nf++;
+        k = 0; a = 0; b = 0;
+      }
+    }
+    Object.assign(this, { dl, dr, dn, k, a, b });
+  }
+  /** 들어온 만큼의 길이(초) */
+  get seconds() { return this.nf * this.fl / this.sr; }
+  finish() { return featuresFromEnergy(this.eM.subarray(0, this.nf), this.eS.subarray(0, this.nf), this.fl, this.sr, this.o); }
+}
 /** chans: Float32Array 1~2개 (가능하면 8000Hz). 돌려줌: { hop(초), v(-1~1, 클수록 목소리), raw(dB) }
     가운데(L+R) 중음역 에너지에서 옆(L-R) 에너지를 뺀 값 — 가운데에 놓이는 목소리를 잡고, 넓게 퍼진 악기 · 베이스 · 킥은 덜어 낸다 */
 export function featuresFromPCM(chans, sampleRate, opt = {}) {
-  const o = { ...FEAT, ...opt };
-  let sr = sampleRate;
-  const L = chans[0], R = chans[1] || chans[0];
-  const step = sr > 12000 ? Math.floor(sr / 8000) : 1;          // 너무 촘촘하면 솎아서 (평균) 계산량을 줄임
-  const n = Math.floor(L.length / step);
-  const M = new Float32Array(n), S = new Float32Array(n);
-  for (let i = 0, j = 0; i < n; i++) {
-    let l = 0, r = 0;
-    for (let k = 0; k < step; k++, j++) { l += L[j]; r += R[j]; }
-    M[i] = (l + r) / (2 * step); S[i] = (l - r) / (2 * step);
-  }
-  sr /= step;
-  for (const x of [M, S]) { highpass(x, o.hp, sr, 0.5412); highpass(x, o.hp, sr, 1.3066); }   // 4차 버터워스: 베이스 · 킥 빼기
-  const fl = Math.max(1, Math.round(o.frame * sr)), nf = Math.floor(n / fl);
-  const eM = new Float64Array(nf), eS = new Float64Array(nf);
-  for (let f = 0, i = 0; f < nf; f++) {
-    let a = 0, b = 0;
-    for (let k = 0; k < fl; k++, i++) { a += M[i] * M[i]; b += S[i] * S[i]; }
-    eM[f] = a / fl; eS[f] = b / fl;
-  }
+  const fs = new FeatStream(sampleRate, opt);
+  fs.push(chans[0], chans[1] || chans[0]);
+  return fs.finish();
+}
+function featuresFromEnergy(eM, eS, fl, sr, o) {
+  const nf = eM.length;
   const sm = Math.max(1, Math.round(o.smooth / o.frame)), h = sm >> 1;
   const box = x => {                                              // 이동 평균
     const y = new Float64Array(x.length); let acc = 0;
@@ -397,6 +418,18 @@ const aborted = signal => { if (signal && signal.aborted) throw abortError(); };
 const idle = () => new Promise(r => setTimeout(r, 0));       // 오래 걸리는 계산 사이에 화면이 멈추지 않게
 const packV = v => { const q = new Int8Array(v.length); for (let i = 0; i < v.length; i++) q[i] = Math.round(Math.max(-1, Math.min(1, v[i])) * 127); return q; };
 const unpackV = q => { const v = new Float32Array(q.length); for (let i = 0; i < q.length; i++) v[i] = q[i] / 127; return v; };
+/** 음악 → 목소리 활동 곡선. 조금씩 풀어 바로 줄이고, 모르는 형식은 짧은 곡(100초 이하)만 통째로 */
+async function analyze(url, duration, signal) {
+  const fs = new FeatStream(SR);
+  try {
+    const r = await decodeChunks(url, { duration, signal, onChunk: (L, R) => fs.push(L, R) });
+    return { feat: fs.finish(), dur: r.seconds || duration };
+  } catch (e) {
+    if ((e && e.name === 'AbortError') || !(e instanceof Unsupported) || duration > 100) throw e;
+    const pcm = await decodePCM(url, duration, signal);
+    return { feat: featuresFromPCM(pcm.chans, pcm.sr), dur: pcm.dur || duration };
+  }
+}
 async function decodePCM(url, duration, signal) {
   const res = await fetch(url, { signal });
   if (!res.ok && res.status !== 206) throw new Error('fetch ' + res.status);
@@ -426,11 +459,9 @@ export async function autoSync({ key, url, lines, duration, signal }) {
   let out = null, method = 'text', vq = null;
   if (url && duration > 0 && duration <= MAX_DUR) {
     try {
-      const pcm = await decodePCM(url, duration, signal);
+      const { feat, dur } = await analyze(url, duration, signal);
       await idle(); aborted(signal);
-      const feat = featuresFromPCM(pcm.chans, pcm.sr);
-      await idle(); aborted(signal);
-      out = align(lines, feat, pcm.dur || duration);
+      out = align(lines, feat, dur || duration);
       vq = packV(resample(feat.v, feat.hop, ALIGN.hop));
       method = 'audio';
     } catch (e) {

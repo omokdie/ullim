@@ -21,7 +21,7 @@ const { _electron: electron } = require('playwright');
     const m = await app.evaluate(({ BrowserWindow }) => ({ icon: global.__icons[global.__icons.length - 1] || '', bg: BrowserWindow.getAllWindows()[0].getBackgroundColor() }));
     const brand = await win.evaluate(() => [...document.querySelectorAll('.brand img')].map(i => i.getAttribute('src') + ':' + (i.complete && i.naturalWidth > 0)));
     r[th + (r[th] ? '2' : '')] = { ...m, brand };
-    const wantIcon = th === 'dark' ? /icon-dark\.png$|ullim-dark\.ico$/ : /assets\/(icon\.png|ullim\.ico)$/;
+    const wantIcon = th === 'dark' ? /icon-dark\.png$|ullim-dark\.ico$/ : /(web\/img\/icon\.png|assets\/ullim\.ico)$/;
     if (!wantIcon.test(m.icon)) bad.push(`${th}: icon ${m.icon}`);
     if (!brand.every(s => s.startsWith(th === 'dark' ? 'img/icon-dark.png:true' : 'img/icon.png:true'))) bad.push(`${th}: brand ${brand}`);
     const lum = parseInt(m.bg.slice(1, 3), 16);

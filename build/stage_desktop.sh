@@ -7,6 +7,5 @@ rm -rf "$OUT"; mkdir -p "$OUT/assets"
 cp "$ROOT/desktop/main.js" "$ROOT/desktop/preload.js" "$ROOT/desktop/package.json" "$OUT/"
 cp -r "$ROOT/web" "$OUT/web"
 cp "$ROOT/assets/ullim.ico" "$ROOT/assets/ullim-dark.ico" "$ROOT/assets/tb_play.png" "$ROOT/assets/tb_pause.png" "$ROOT/assets/tb_prev.png" "$ROOT/assets/tb_next.png" "$OUT/assets/"
-cp "$ROOT/web/img/icon.png" "$OUT/assets/icon.png"
-cp "$ROOT/web/img/icon-dark.png" "$OUT/assets/icon-dark.png"
+# 리눅스 창 아이콘은 web/img 의 것을 그대로 씀 (같은 그림을 두 번 넣지 않음)
 echo "staged -> $OUT"

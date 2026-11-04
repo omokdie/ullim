@@ -5,7 +5,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 
 !define APPNAME   "울림"
-!define VERSION   "1.2.2"
+!define VERSION   "1.2.3"
 !define PUBLISHER "Ullim"
 !define EXE       "Ullim.exe"
 !define AUMID     "kr.ullim.player"
@@ -31,7 +31,7 @@ BrandingText "${APPNAME} ${VERSION}"
 ShowInstDetails nevershow
 ShowUninstDetails nevershow
 
-VIProductVersion "1.2.2.0"
+VIProductVersion "1.2.3.0"
 VIAddVersionKey /LANG=1042 "ProductName" "${APPNAME}"
 VIAddVersionKey /LANG=1042 "FileDescription" "${APPNAME} 설치 프로그램"
 VIAddVersionKey /LANG=1042 "CompanyName" "${PUBLISHER}"
@@ -105,13 +105,43 @@ VIAddVersionKey /LANG=1042 "ProductVersion" "${VERSION}"
   DeleteRegKey /ifempty HKCU "Software\Classes\.${EXT}"
 !macroend
 
+; 설치 폴더가 디스크에서 실제로 차지하는 크기 (압축 반영, 4KB 단위로 올림) — 설정 > 앱 에 보이는 크기
+Var DiskKB
+Function SumDiskSize
+  ; $R9: 파일 전체 경로 (Locate 가 $0~$9 를 지켜 줌)
+  System::Call 'kernel32::GetCompressedFileSizeW(w R9, p 0) i .r0'
+  ${If} $0 > 0
+    IntOp $0 $0 + 4095
+    IntOp $0 $0 >> 12
+    IntOp $0 $0 << 2
+    IntOp $DiskKB $DiskKB + $0
+  ${EndIf}
+  ClearErrors
+  Push ""
+FunctionEnd
+
 Section "install"
   !insertmacro CloseApp ""
   SetOutPath "$INSTDIR"
   ; 이전 버전의 앱 파일은 지우고 새로 복사 (설정 · 재생목록은 사용자 폴더라 그대로 남음)
   RMDir /r "$INSTDIR\resources\app"
+  RMDir /r "$INSTDIR\locales"
+  ; 1.2.3 부터 넣지 않는 부품 (WebGPU · 소프트웨어 Vulkan — 음악 앱에 필요 없음): 업데이트할 때도 지움
+  Delete "$INSTDIR\dxcompiler.dll"
+  Delete "$INSTDIR\dxil.dll"
+  Delete "$INSTDIR\vk_swiftshader.dll"
+  Delete "$INSTDIR\vk_swiftshader_icd.json"
+  Delete "$INSTDIR\vulkan-1.dll"
   File /r /x "README.txt" "${SRC}/*.*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+
+  ; 디스크 사용량 줄이기: 윈도우의 '실행 파일 압축'(compact /EXE, Windows 10 부터 기본 기능)
+  ;  - 읽을 때 윈도우가 알아서 풀어 주므로 앱 동작 · 메모리는 그대로, 디스크는 절반 가까이
+  ;  - NTFS 가 아니거나 실패해도 압축 없이 그대로 쓴다 (오류 아님)
+  DetailPrint "디스크 공간 줄이는 중..."
+  SetOutPath "$INSTDIR"
+  nsExec::Exec '"$SYSDIR\compact.exe" /C /I /Q /EXE:XPRESS16K "$INSTDIR\*.exe" "$INSTDIR\*.dll" "$INSTDIR\*.dat" "$INSTDIR\*.bin" "$INSTDIR\*.html"'
+  Pop $0
 
   ; 바로 가기 (작업 표시줄 · 미디어 컨트롤이 같은 앱으로 묶이도록 AUMID 지정)
   CreateShortCut "$SMPROGRAMS\${APPNAME}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\${EXE}" 0 SW_SHOWNORMAL "" "음장 효과 음악 플레이어"
@@ -156,8 +186,12 @@ Section "install"
   WriteRegStr HKCU "${UNINSTKEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
-  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
-  IntFmt $0 "0x%08X" $0
+  StrCpy $DiskKB 0
+  ${Locate} "$INSTDIR" "/L=F /M=*.* /G=1" "SumDiskSize"
+  ${If} $DiskKB < 1024
+    ${GetSize} "$INSTDIR" "/S=0K" $DiskKB $1 $2
+  ${EndIf}
+  IntFmt $0 "0x%08X" $DiskKB
   WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" "$0"
 
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'

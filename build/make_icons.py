@@ -311,7 +311,7 @@ def main():
         write_all(master, fg, mono, bg_full=None)
         # 어두운 화면용: 앱 안 로고 · PC 창 아이콘 (안드로이드는 values-night 의 ic_bg 로 바탕만 바뀜)
         A = os.path.join(ROOT, 'assets')
-        to_img(master_dark, 512).save(os.path.join(ROOT, 'web', 'img', 'icon-dark.png'))
+        to_img(master_dark, 128).save(os.path.join(ROOT, 'web', 'img', 'icon-dark.png'), optimize=True)   # 화면에는 30px (3배 화면도 128px 이면 충분)
         to_img(master_dark, 1024).save(os.path.join(A, 'icon-dark-1024.png'))
         to_img(master_dark, 256).save(os.path.join(A, 'ullim-dark.ico'), sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
         print('dark icons written')
@@ -351,12 +351,19 @@ def main():
     write_all(master, fg, mono, bg_full=np.concatenate([bg, np.ones((W, W, 1), np.float32)], -1))
 
 
+def save_res(img, path_noext):
+    """안드로이드 아이콘 리소스는 무손실 WebP (같은 그림, PNG 보다 40% 작음 · Android 4.3 부터) — 같은 이름의 PNG 는 지움"""
+    for ext in ('.png', '.webp'):
+        if os.path.exists(path_noext + ext): os.remove(path_noext + ext)
+    img.save(path_noext + '.webp', 'WEBP', lossless=True, quality=100, method=6)
+
+
 def write_all(master, fg, mono, bg_full=None):
     """bg_full 이 없으면 적응형 아이콘 바탕은 흰색(@color/ic_bg)"""
     A = os.path.join(ROOT, 'assets')
     to_img(master, 1024).save(os.path.join(A, 'icon-1024.png'))
     to_img(master, 256).save(os.path.join(A, 'icon-256.png'))
-    to_img(master, 512).save(os.path.join(ROOT, 'web', 'img', 'icon.png'))
+    to_img(master, 128).save(os.path.join(ROOT, 'web', 'img', 'icon.png'), optimize=True)
     for s in (16, 32, 48, 256):
         to_img(master, s).save(os.path.join(A, f'exe_{s}.png'))
     ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
@@ -365,12 +372,12 @@ def write_all(master, fg, mono, bg_full=None):
     res = os.path.join(ROOT, 'android', 'res')
     for name, k in dens.items():
         os.makedirs(os.path.join(res, f'drawable-{name}'), exist_ok=True)
-        to_img(fg, int(108 * k)).save(os.path.join(res, f'drawable-{name}', 'ic_launcher_fg.png'))
+        save_res(to_img(fg, int(108 * k)), os.path.join(res, f'drawable-{name}', 'ic_launcher_fg'))
         bgp = os.path.join(res, f'drawable-{name}', 'ic_launcher_bg.png')
         if bg_full is not None: to_img(bg_full, int(108 * k)).convert('RGB').save(bgp)
         elif os.path.exists(bgp): os.remove(bgp)
-        to_img(mono, int(108 * k)).save(os.path.join(res, f'drawable-{name}', 'ic_launcher_mono.png'))
-        to_img(master, int(48 * k)).save(os.path.join(res, f'mipmap-{name}', 'ic_launcher.png'))
+        save_res(to_img(mono, int(108 * k)), os.path.join(res, f'drawable-{name}', 'ic_launcher_mono'))
+        save_res(to_img(master, int(48 * k)), os.path.join(res, f'mipmap-{name}', 'ic_launcher'))
         to_img(master, int(48 * k)).save(os.path.join(A, f'ic_launcher_{name}.png'))
     xml = os.path.join(res, 'mipmap-anydpi-v26', 'ic_launcher.xml')
     bg_ref = '@drawable/ic_launcher_bg' if bg_full is not None else '@color/ic_bg'

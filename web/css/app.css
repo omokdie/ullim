@@ -113,7 +113,7 @@ input, select { font: inherit; color: inherit; }
 .tbtitle { font-size: 18px; font-weight: 750; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .2s; margin-left: 4px; }
 .topbar.titled .tbtitle { opacity: 1; }
 .topbar .sp { flex: 1; }
-.scroller { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; padding: var(--top-h) 28px 0 18px; overscroll-behavior: contain; scrollbar-width: thin; }
+.scroller { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; padding: var(--top-h) 28px 0 18px; overscroll-behavior: contain; scrollbar-width: thin; isolation: isolate; }   /* 안의 z-index(재생 중 테두리 등)가 위 막대 위로 올라오지 않게 */
 .tailpad { height: calc(var(--bar-h) + var(--gap) * 2 + 28px); }
 .view { position: relative; }
 /* 휴대폰: 좌우로 밀어 화면 옮기기 */
@@ -158,20 +158,24 @@ input, select { font: inherit; color: inherit; }
 .play { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--text); color: var(--bg); margin: 0 6px; transition: transform .1s; }
 .play:active { transform: scale(.94); }
 .play .i { width: 22px; height: 22px; }
-/* 재생 버튼: 울림 표시 ↔ 세모 (js: setPlayGlyph) */
-.pg { width: 28px; height: 28px; overflow: visible; }
-.pg .core { fill: currentColor; }
-.pg .waves path { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; transform-box: view-box; transform-origin: 12px 12px; }
-.pg .waves g { transform-box: view-box; transform-origin: 12px 12px; opacity: 0; transform: scale(.45); transition: opacity .2s ease-in, transform .22s ease-in; }
-.pg.ul .waves g { opacity: 1; transform: none; transition: opacity .26s ease-out, transform .34s cubic-bezier(.2, 1.4, .4, 1); }
-.pg.ul .waves .w1 { transition-delay: .14s; }
-.pg.ul .waves .w2 { transition-delay: .24s; }
-/* 재생 중: 물결이 퍼지듯 (초당 25번만 바꿔 유리 막대를 덜 다시 그림) */
-@keyframes pgWave { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .38; transform: scale(1.1); } }
-.pg.on .w1 path { animation: pgWave 1.6s steps(40, jump-none) infinite; }
-.pg.on .w2 path { animation: pgWave 1.6s steps(40, jump-none) .4s infinite; }
-:root.saving .pg.on .waves path { animation: none; }
-@media (prefers-reduced-motion: reduce) { .pg.on .waves path { animation: none; } .pg .waves g { transition: none; } }
+/* 재생 버튼: 울림 표시 ↔ 세모 (js: setPlayGlyph). 겹친 그림 셋: 가운데(.pgc) · 물결(.pgw.w1 · .w2)
+   펼침/접힘은 .pgw 의 전환, 재생 중 움직임은 안쪽 svg 의 애니메이션 — 둘 다 투명도 · 크기만이라 합성기(GPU)에서만 움직임 */
+.pg { position: relative; display: inline-block; width: 28px; height: 28px; flex: none; }
+.pg svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; display: block; }
+.pg .pgc path { fill: currentColor; }
+.pg .pgw { position: absolute; inset: 0; opacity: 0; transform: scale(.45); transition: opacity .2s ease-in, transform .22s ease-in; }
+.pg .pgw path { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.pg.ul .pgw { opacity: 1; transform: none; transition: opacity .26s ease-out, transform .34s cubic-bezier(.2, 1.4, .4, 1); }
+.pg.ul .w1 { transition-delay: .14s; }
+.pg.ul .w2 { transition-delay: .24s; }
+/* 재생 중: 안쪽 물결 → 두 겹 → 바깥 물결 → 쉼, 0.4초마다 한 칸씩 (신호가 퍼져 나가듯).
+   부드럽게 움직이면 재생 막대(유리)를 초당 수십 번 다시 그려야 해서(휴대폰 발열의 대부분) 1.6초에 4번만 바뀌게 */
+@keyframes pgIn { 0%, 49.9% { opacity: 1; transform: scale(1.04); } 50%, 100% { opacity: .4; transform: scale(1); } }
+@keyframes pgOut { 0%, 24.9% { opacity: .4; transform: scale(1); } 25%, 74.9% { opacity: 1; transform: scale(1.04); } 75%, 100% { opacity: .4; transform: scale(1); } }
+.pg.on .w1 svg { animation: pgIn 1.6s steps(1, end) infinite; }
+.pg.on .w2 svg { animation: pgOut 1.6s steps(1, end) infinite; }
+:root.saving .pg.on .pgw svg { animation: none; }
+@media (prefers-reduced-motion: reduce) { .pg.on .pgw svg { animation: none; } .pg .pgw { transition: none; } }
 .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--ink); font-size: 11px; display: inline-grid; place-items: center; font-weight: 700; }
 
 /* ---------- 슬라이더 · 스위치 · 버튼 ---------- */
@@ -254,7 +258,7 @@ select.sel option { background: var(--solid); }
 .ptile.new .mosaic { background: none; border: 1.5px dashed var(--line2); }
 .ptile.new .fb { color: var(--muted); }
 
-.mosaic { position: relative; display: block; overflow: hidden; background: var(--panel2); border-radius: 10px; flex: none; }
+.mosaic { position: relative; display: block; overflow: hidden; background: var(--panel2); border-radius: 10px; flex: none; isolation: isolate; }
 .mosaic .fb { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255, 255, 255, .78); }
 .mosaic .fb .i { width: 36%; height: 36%; }
 .mosaic .mz { position: absolute; inset: 0; display: grid; }

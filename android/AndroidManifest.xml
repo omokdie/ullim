@@ -3,6 +3,8 @@
     package="kr.ullim.player">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 와이파이 / 모바일 데이터 구분 (데이터일 때 가사를 자동으로 찾지 않기) — 사용자에게 묻지 않는 일반 권한 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />

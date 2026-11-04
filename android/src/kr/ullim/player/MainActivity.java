@@ -9,6 +9,9 @@ import android.content.pm.PackageManager;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -80,6 +83,7 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(this), "UllimAndroid");
         setContentView(web);
         web.loadUrl(ORIGIN + "/index.html");
+        watchNetwork();
         if (state == null) {
             handleIntent(getIntent());
             new Thread(this::removeOldUpdateFiles).start();
@@ -111,10 +115,47 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (netCb != null) { try { getSystemService(ConnectivityManager.class).unregisterNetworkCallback(netCb); } catch (Exception e) { /* noop */ } netCb = null; }
         if (isFinishing()) PlaybackService.stop(this);
         if (instance == this) instance = null;
         if (web != null) { web.destroy(); web = null; }
         super.onDestroy();
+    }
+
+    /* ---------------- 연결 종류 (와이파이 · 모바일 데이터) ---------------- */
+    NetCb netCb;
+    String lastNet = "";
+    /** "wifi"(이더넷 포함) · "cellular" · "other" · "none" · "unknown" */
+    String netType() {
+        try {
+            ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+            Network n = cm.getActiveNetwork();
+            if (n == null) return "none";
+            NetworkCapabilities c = cm.getNetworkCapabilities(n);
+            if (c == null) return "none";
+            if (c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return "wifi";
+            if (c.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) return "cellular";
+            return "other";
+        } catch (Exception e) { return "unknown"; }
+    }
+    void watchNetwork() {
+        try {
+            netCb = new NetCb(this);
+            getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(netCb);
+        } catch (Exception e) { netCb = null; }
+    }
+    void notifyNet() {
+        final String t = netType();
+        if (t.equals(lastNet)) return;
+        lastNet = t;
+        js("window.__ullimNet && window.__ullimNet(" + JSONObject.quote(t) + ")");
+    }
+    static class NetCb extends ConnectivityManager.NetworkCallback {
+        final MainActivity a;
+        NetCb(MainActivity a) { this.a = a; }
+        @Override public void onCapabilitiesChanged(Network n, NetworkCapabilities c) { a.notifyNet(); }
+        @Override public void onLost(Network n) { a.notifyNet(); }
+        @Override public void onAvailable(Network n) { a.notifyNet(); }
     }
 
     /* ---------------- JS 호출 ---------------- */
@@ -172,6 +213,9 @@ public class MainActivity extends Activity {
                 return (int) (Build.VERSION.SDK_INT >= 28 ? p.getLongVersionCode() : p.versionCode);
             } catch (Exception e) { return 0; }
         }
+        /** 지금 연결: "wifi" · "cellular" · "other" · "none" (모바일 데이터면 가사를 자동으로 찾지 않기) */
+        @JavascriptInterface
+        public String net() { return a.netType(); }
         /** 배터리 절약 모드면 유리 효과(흐림 · 굴절)를 끈다 — 권한 필요 없음 */
         @JavascriptInterface
         public boolean powerSave() {

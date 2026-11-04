@@ -87,6 +87,7 @@ function wk(name, map) {
         const prm = node.parameters.get(t[0]); if (!prm) return;
         prm.setValueAtTime(t[1] ? t[1](v) : v, now(ctx));
       },
+      dispose() { try { node.port.postMessage('stop'); node.port.close(); } catch (e) { /* noop */ } },   // 처리기를 멈춰야 스레드에서 빠짐
     };
   };
   fn.worklet = name;
@@ -255,6 +256,7 @@ export const FX = [
       conv.buffer = makeIR(ctx, space, 1);
       return {
         input: dw.input, output: dw.output,
+        dispose() { clearTimeout(timer); },
         set(k, v) {
           if (k === 'space') { if (v !== space) { space = v; regen(); } }
           if (k === 'size') { if (v !== size) { size = v; regen(); } }

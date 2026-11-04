@@ -10,8 +10,13 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$EZIP" "$OUT"
 mv "$OUT/electron.exe" "$OUT/Ullim.exe"
 rm -f "$OUT/resources/default_app.asar"
-# 화면 언어 파일은 한국어 · 영어만 남김 (약 50MB 절약)
+# 화면 언어 파일은 한국어 · 영어만 남김
 find "$OUT/locales" -name '*.pak' ! -name 'ko.pak' ! -name 'en-US.pak' -delete
+# 음악 앱이 쓰지 않는 그래픽 부품 빼기 (약 32MB)
+#  - dxcompiler.dll · dxil.dll: WebGPU(D3D12) 셰이더 컴파일러 — 화면 그리기(ANGLE · D3D11)는 d3dcompiler_47.dll 을 씀 (남겨 둠)
+#  - vk_swiftshader*, vulkan-1.dll: 그래픽 카드가 없을 때 WebGL · WebGPU 를 CPU 로 흉내 내는 부품 — 울림은 WebGL · WebGPU 를 쓰지 않고,
+#    그래픽 카드를 못 쓰면 Chromium 은 소프트웨어 합성으로 그대로 그린다
+rm -f "$OUT/dxcompiler.dll" "$OUT/dxil.dll" "$OUT/vk_swiftshader.dll" "$OUT/vk_swiftshader_icd.json" "$OUT/vulkan-1.dll"
 bash "$ROOT/build/stage_desktop.sh" "$OUT/resources/app" >/dev/null
 python3 "$ROOT/build/pe_patch.py" "$OUT/Ullim.exe" "$ROOT/assets/exe_256.png"
 python3 - "$OUT/README.txt" "$VER" <<'PY'

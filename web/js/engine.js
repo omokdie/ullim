@@ -18,7 +18,7 @@ export class Engine extends EventTarget {
     this.analyser.fftSize = 4096; this.analyser.smoothingTimeConstant = 0.72;
     this.analyser.minDecibels = -90; this.analyser.maxDecibels = -12;
     this.switcher.connect(this.master).connect(this.sleepGain).connect(ctx.destination);
-    this.switcher.connect(this.analyser);
+    this.tap = false;                                    // 분석기는 비주얼라이저가 그릴 때만 연결 (setTap)
     this.mix.connect(this.switcher);
 
     this.decks = [this._deck(), this._deck()];
@@ -30,10 +30,18 @@ export class Engine extends EventTarget {
     this.speed = { rate: 100, keep: true };
     this._chain = '';
     this._queue = Promise.resolve();
+    // 효과용 AudioWorklet 은 그 효과를 처음 켤 때 불러온다 (안 쓰면 JS 실행 환경 하나 · 스레드 전환이 없어 메모리 · 배터리 절약)
     this.workletOK = false;
-    this.ready = (ctx.audioWorklet
-      ? ctx.audioWorklet.addModule(new URL('./fx-worklet.js', import.meta.url).href).then(() => true, e => { console.warn('worklet', e); return false; })
-      : Promise.resolve(false)).then(ok => { this.workletOK = ok; return ok; });
+    this.workletSupported = !!ctx.audioWorklet;
+    this._wl = null;
+  }
+  ensureWorklet() {
+    if (!this._wl) {
+      this._wl = (this.ctx.audioWorklet
+        ? this.ctx.audioWorklet.addModule(new URL('./fx-worklet.js', import.meta.url).href).then(() => true, e => { console.warn('worklet', e); return false; })
+        : Promise.resolve(false)).then(ok => { this.workletOK = ok; return ok; });
+    }
+    return this._wl;
   }
 
   _deck() {
@@ -43,6 +51,12 @@ export class Engine extends EventTarget {
     const g = this.ctx.createGain();
     src.connect(g).connect(this.mix);
     return { a, src, g, track: null };
+  }
+  /** 비주얼라이저가 그리는 동안만 분석기에 소리를 넣음 (안 그릴 때 · 백그라운드에서 계산 줄이기) */
+  setTap(on) {
+    if (this.tap === !!on) return;
+    this.tap = !!on;
+    try { if (on) this.switcher.connect(this.analyser); else this.switcher.disconnect(this.analyser); } catch (e) { /* noop */ }
   }
   get deck() { return this.decks[this.active]; }
   get other() { return this.decks[1 - this.active]; }
@@ -137,26 +151,46 @@ export class Engine extends EventTarget {
     return this._queue;
   }
   async _rebuildNow() {
-    await this.ready;
     const ids = this.bypass ? [] : ORDER.filter(id => this.isOn(id));
-    const chain = ids.map(id => this._build(id) ? id : '').filter(Boolean);
-    const sig = chain.join('>');
-    if (sig === this._chain) return;
     const ctx = this.ctx, g = this.switcher.gain, running = ctx.state === 'running';
-    if (running) {
+    let faded = false;
+    const fadeOut = async () => {
+      if (faded || !running) return;
       const t = ctx.currentTime;
       g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(0, t + 0.015);
+      faded = true;
       await sleep(30);
+    };
+    if (!this._wl && ids.some(id => FX_BY_ID[id] && FX_BY_ID[id].build && FX_BY_ID[id].build.worklet)) {
+      await fadeOut();                                   // 처음 불러올 때 오디오 스레드가 바뀌므로 소리를 줄여 둔 채로
+      await this.ensureWorklet();
+    } else if (this._wl) await this._wl;
+    const chain = ids.map(id => this._build(id) ? id : '').filter(Boolean);
+    const sig = chain.join('>');
+    if (sig !== this._chain) {
+      await fadeOut();
+      this.mix.disconnect();
+      for (const id of Object.keys(this.mods)) { try { this.mods[id].output.disconnect(); } catch (e) { /* noop */ } }
+      let node = this.mix;
+      for (const id of chain) { node.connect(this.mods[id].input); node = this.mods[id].output; }
+      node.connect(this.switcher);
+      this._chain = sig;
+      this.dispatchEvent(new CustomEvent('chain', { detail: chain }));
     }
-    this.mix.disconnect();
-    for (const id of Object.keys(this.mods)) { try { this.mods[id].output.disconnect(); } catch (e) { /* noop */ } }
-    let node = this.mix;
-    for (const id of chain) { node.connect(this.mods[id].input); node = this.mods[id].output; }
-    node.connect(this.switcher);
-    this._chain = sig;
-    const t = ctx.currentTime;
-    g.cancelScheduledValues(t); g.setValueAtTime(running ? 0 : 1, t); g.linearRampToValueAtTime(1, t + 0.03);
-    this.dispatchEvent(new CustomEvent('chain', { detail: chain }));
+    if (faded || !running) {
+      const t = ctx.currentTime;
+      g.cancelScheduledValues(t); g.setValueAtTime(running ? 0 : 1, t); g.linearRampToValueAtTime(1, t + 0.03);
+    }
+    // 꺼진 효과는 버림: 연결을 끊어도 워클릿 처리기는 계속 돌고(배터리) 리버브 등은 큰 버퍼를 들고 있으므로
+    for (const id of Object.keys(this.mods)) if (!chain.includes(id)) this._dispose(id);
+  }
+  _dispose(id) {
+    const m = this.mods[id];
+    delete this.mods[id];
+    if (!m) return;
+    try { m.input.disconnect(); } catch (e) { /* noop */ }
+    try { m.output.disconnect(); } catch (e) { /* noop */ }
+    try { if (m.dispose) m.dispose(); } catch (e) { /* noop */ }
   }
 
   /* ---------- 덱 ---------- */

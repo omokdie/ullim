@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('ullimNative', {
   updateDiscard: () => ipcRenderer.invoke('update-discard'),
   updateRestart: () => ipcRenderer.send('update-restart'),
   setTheme: (bg, light) => ipcRenderer.send('set-theme', String(bg || ''), !!light),
+  trimMemory: () => ipcRenderer.send('trim-memory'),
   onCommand: cb => ipcRenderer.on('command', (_e, cmd, arg) => cb(cmd, arg)),
   onOpenFiles: cb => ipcRenderer.on('open-files', (_e, paths) => cb(paths)),
 });

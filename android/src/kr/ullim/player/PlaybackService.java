@@ -33,14 +33,26 @@ public class PlaybackService extends Service {
     static final String CH = "playback";
     static final int NID = 7;
     static final String A_TOGGLE = "kr.ullim.player.TOGGLE", A_NEXT = "kr.ullim.player.NEXT",
-            A_PREV = "kr.ullim.player.PREV", A_CLOSE = "kr.ullim.player.CLOSE";
+            A_PREV = "kr.ullim.player.PREV", A_CLOSE = "kr.ullim.player.CLOSE",
+            A_SHUFFLE = "kr.ullim.player.SHUFFLE", A_REPEAT = "kr.ullim.player.REPEAT";
+    static final long IDLE_CLOSE_MS = 15 * 60 * 1000L;   // 멈춘 채 15분이면 알림을 닫음 (닫기 버튼 자리에 무작위 · 반복을 넣었으므로)
 
     MediaSession session;
     PowerManager.WakeLock wakeLock;
     boolean playing, hasTrack, noisyOn, closing;
     String title = "울림", artist = "", album = "";
     long pos, dur;
+    float rate = 1f;
+    boolean shuffle;
+    String repeat = "all";
     Bitmap art;
+    final android.os.Handler idle = new android.os.Handler(android.os.Looper.getMainLooper());
+    final Runnable idleClose = () -> { if (!playing && !closing) shutdown(); };
+    // 마지막으로 시스템에 알린 것 — 같으면 다시 보내지 않음 (알림을 다시 그리면 SystemUI · 블루투스까지 일이 생겨 배터리 · 발열)
+    boolean metaSet, stateSet, notified, statePlaying, stateShuffle;
+    long statePos, stateAt;
+    float stateRate = 1f;
+    String stateRepeat = "";
 
     static class Noisy extends BroadcastReceiver {
         @Override public void onReceive(Context c, Intent i) {
@@ -55,6 +67,8 @@ public class PlaybackService extends Service {
         @Override public void onSeekTo(long p) { MainActivity.command("seek", String.valueOf(p)); }
         @Override public void onStop() { MainActivity.command("pause", null); }
         @Override public void onCustomAction(String action, android.os.Bundle extras) {
+            if ("shuffle".equals(action)) { MainActivity.command("shuffle", null); return; }
+            if ("repeat".equals(action)) { MainActivity.command("repeat", null); return; }
             if ("close".equals(action)) { MainActivity.command("pause", null); if (inst != null) inst.shutdown(); }
         }
     }
@@ -109,12 +123,18 @@ public class PlaybackService extends Service {
         if (A_TOGGLE.equals(a)) MainActivity.command("toggle", null);
         else if (A_NEXT.equals(a)) MainActivity.command("next", null);
         else if (A_PREV.equals(a)) MainActivity.command("prev", null);
+        else if (A_SHUFFLE.equals(a)) MainActivity.command("shuffle", null);
+        else if (A_REPEAT.equals(a)) MainActivity.command("repeat", null);
         else if (A_CLOSE.equals(a)) { MainActivity.command("pause", null); shutdown(); }
         return START_NOT_STICKY;
     }
 
     void apply(String json) {
         if (closing) return;
+        final boolean wasPlaying = playing, wasShuffle = shuffle;
+        final String pt = title, pa = artist, pal = album, prep = repeat;
+        final long pdur = dur;
+        boolean artChanged = false;
         try {
             JSONObject o = new JSONObject(json);
             hasTrack = o.optBoolean("hasTrack");
@@ -124,32 +144,57 @@ public class PlaybackService extends Service {
             album = o.optString("album", "");
             pos = o.optLong("position", 0);
             dur = o.optLong("duration", 0);
-            if (o.has("art")) art = decode(o.optString("art", ""));
+            rate = (float) o.optDouble("rate", 1);
+            if (!(rate > 0.05f && rate < 8f)) rate = 1f;
+            shuffle = o.optBoolean("shuffle", shuffle);
+            repeat = o.optString("repeat", repeat);
+            if (o.has("art")) { art = decode(o.optString("art", "")); artChanged = true; }
         } catch (Exception e) { /* keep previous */ }
         if (!hasTrack) { shutdown(); return; }
         if (!session.isActive()) session.setActive(true);
-        MediaMetadata.Builder mb = new MediaMetadata.Builder()
-                .putString(MediaMetadata.METADATA_KEY_TITLE, title)
-                .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
-                .putString(MediaMetadata.METADATA_KEY_ALBUM, album)
-                .putLong(MediaMetadata.METADATA_KEY_DURATION, dur);
-        if (art != null) mb.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art);
-        session.setMetadata(mb.build());
-        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_PLAY_PAUSE
-                | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO | PlaybackState.ACTION_STOP;
-        session.setPlaybackState(new PlaybackState.Builder().setActions(actions)
-                .addCustomAction(new PlaybackState.CustomAction.Builder("close", "닫기", android.R.drawable.ic_menu_close_clear_cancel).build())
-                .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED, pos, playing ? 1f : 0f, SystemClock.elapsedRealtime())
-                .build());
-        if (playing) {
-            if (!wakeLock.isHeld()) wakeLock.acquire(6L * 60 * 60 * 1000);
-            noisy(true);
-        } else {
-            if (wakeLock.isHeld()) wakeLock.release();
-            noisy(false);
+        final boolean meta = !metaSet || artChanged || !title.equals(pt) || !artist.equals(pa) || !album.equals(pal) || dur != pdur;
+        if (meta) {
+            MediaMetadata.Builder mb = new MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
+                    .putString(MediaMetadata.METADATA_KEY_ALBUM, album)
+                    .putLong(MediaMetadata.METADATA_KEY_DURATION, dur);
+            if (art != null) mb.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art);
+            session.setMetadata(mb.build());
+            metaSet = true;
         }
-        foreground();
+        // 위치는 시스템이 (위치 · 속도 · 시각)으로 알아서 흘려보냄 → 상태 · 속도가 바뀌었거나 예상과 1.5초 넘게 다를 때만 다시 알림
+        final long now = SystemClock.elapsedRealtime();
+        final long expect = statePos + (statePlaying ? (long) ((now - stateAt) * stateRate) : 0);
+        if (!stateSet || playing != statePlaying || rate != stateRate || shuffle != stateShuffle || !repeat.equals(stateRepeat) || Math.abs(expect - pos) > 1500) {
+            long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_PLAY_PAUSE
+                    | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO | PlaybackState.ACTION_STOP;
+            // 안드로이드 13+ 미디어 컨트롤: 재생 · 이전 · 다음 다음 칸(4 · 5번)에 무작위 · 반복
+            session.setPlaybackState(new PlaybackState.Builder().setActions(actions)
+                    .addCustomAction(new PlaybackState.CustomAction.Builder("shuffle", shuffleLabel(), shuffleIcon()).build())
+                    .addCustomAction(new PlaybackState.CustomAction.Builder("repeat", repeatLabel(), repeatIcon()).build())
+                    .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED, pos, playing ? rate : 0f, now)
+                    .build());
+            stateSet = true; statePlaying = playing; statePos = pos; stateAt = now; stateRate = rate; stateShuffle = shuffle; stateRepeat = repeat;
+        }
+        if (playing != wasPlaying || !notified) {
+            if (playing) {
+                if (!wakeLock.isHeld()) wakeLock.acquire(6L * 60 * 60 * 1000);
+                noisy(true);
+            } else {
+                if (wakeLock.isHeld()) wakeLock.release();
+                noisy(false);
+            }
+        }
+        if (meta || playing != wasPlaying || shuffle != wasShuffle || !repeat.equals(prep) || !notified) { foreground(); notified = true; }   // 알림은 내용이 바뀔 때만 다시 그림
+        idle.removeCallbacks(idleClose);
+        if (!playing) idle.postDelayed(idleClose, IDLE_CLOSE_MS);
     }
+
+    int shuffleIcon() { return shuffle ? R.drawable.ic_n_shuffle_on : R.drawable.ic_n_shuffle_off; }
+    String shuffleLabel() { return shuffle ? "무작위 재생 끄기" : "무작위 재생"; }
+    int repeatIcon() { return "one".equals(repeat) ? R.drawable.ic_n_repeat_one : "off".equals(repeat) ? R.drawable.ic_n_repeat_off : R.drawable.ic_n_repeat_all; }
+    String repeatLabel() { return "one".equals(repeat) ? "한 곡 반복 중" : "off".equals(repeat) ? "반복 안 함" : "전체 반복 중"; }
 
     void foreground() {
         try {
@@ -182,11 +227,14 @@ public class PlaybackService extends Service {
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setCategory(Notification.CATEGORY_TRANSPORT);
         if (art != null) b.setLargeIcon(art);
-        b.addAction(act(android.R.drawable.ic_media_previous, "이전 곡", A_PREV, 10));
-        b.addAction(act(playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play, playing ? "일시정지" : "재생", A_TOGGLE, 11));
-        b.addAction(act(android.R.drawable.ic_media_next, "다음 곡", A_NEXT, 12));
-        b.addAction(act(android.R.drawable.ic_menu_close_clear_cancel, "닫기", A_CLOSE, 13));
-        b.setStyle(new Notification.MediaStyle().setMediaSession(session.getSessionToken()).setShowActionsInCompactView(0, 1, 2));
+        // 무작위 · 이전 · 재생 · 다음 · 반복 (가운데 재생을 기준으로 좌우 대칭, 아이콘은 앱과 같은 24dp 벡터) — 접힌 알림에는 이전 · 재생 · 다음
+        b.addAction(act(shuffleIcon(), shuffleLabel(), A_SHUFFLE, 14));
+        b.addAction(act(R.drawable.ic_n_prev, "이전 곡", A_PREV, 10));
+        b.addAction(act(playing ? R.drawable.ic_n_pause : R.drawable.ic_n_play, playing ? "일시정지" : "재생", A_TOGGLE, 11));
+        b.addAction(act(R.drawable.ic_n_next, "다음 곡", A_NEXT, 12));
+        b.addAction(act(repeatIcon(), repeatLabel(), A_REPEAT, 15));
+        b.setDeleteIntent(PendingIntent.getService(this, 13, new Intent(this, PlaybackService.class).setAction(A_CLOSE), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+        b.setStyle(new Notification.MediaStyle().setMediaSession(session.getSessionToken()).setShowActionsInCompactView(1, 2, 3));
         if (Build.VERSION.SDK_INT >= 31) b.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         return b.build();
     }
@@ -196,7 +244,15 @@ public class PlaybackService extends Service {
         try {
             int c = s.indexOf(',');
             byte[] b = Base64.decode(c >= 0 ? s.substring(c + 1) : s, Base64.DEFAULT);
-            return BitmapFactory.decodeByteArray(b, 0, b.length);
+            // 알림 · 잠금 화면에는 512px 이면 충분 — 크게 풀면 비트맵이 시스템으로 복사될 때마다 메모리
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(b, 0, b.length, o);
+            int sample = 1;
+            while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= 512) sample *= 2;
+            o = new BitmapFactory.Options();
+            o.inSampleSize = sample;
+            return BitmapFactory.decodeByteArray(b, 0, b.length, o);
         } catch (Exception e) {
             return null;
         }
@@ -216,6 +272,8 @@ public class PlaybackService extends Service {
 
     void shutdown() {
         closing = true;
+        idle.removeCallbacks(idleClose);
+        metaSet = stateSet = notified = false;
         noisy(false);
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         if (session != null) session.setActive(false);

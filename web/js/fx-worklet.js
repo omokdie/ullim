@@ -79,7 +79,12 @@ class Rng {
 
 /** Base processor: handles silent/missing input and gives L/R views. */
 class Fx extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.port.onmessage = e => { if (e && e.data === 'stop') this.stopped = true; };   // 효과를 끄면 멈춤 (false 를 돌려줘야 처리 목록에서 빠짐)
+  }
   process(inputs, outputs, params) {
+    if (this.stopped) return false;
     const out = outputs[0];
     const oL = out[0], oR = out[1] || out[0];
     const inp = inputs[0];

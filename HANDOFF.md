@@ -1,6 +1,6 @@
 # 울림 — 작업 인계 문서 (Handoff)
 
-> 갱신: 2026-11-04 KST (1.2.2 준비). 다음 세션은 이 문서 → `README.md` → `RELEASING.md` → `lyrics/README.md` 순서로 읽으면 됩니다.
+> 갱신: 2026-11-04 KST (1.2.3 준비). 다음 세션은 이 문서 → `README.md` → `RELEASING.md` → `lyrics/README.md` 순서로 읽으면 됩니다.
 > 소스: **GitHub `omokdie/ullim` (공개, main)**. 클라우드 세션 작업 폴더 `/home/claude/ullim` (origin = 위 저장소).
 
 ## 1. 사용자 요구사항 (반영 상태)
@@ -23,7 +23,14 @@
 | 14 | 1.2.0: 싱크 없는 가사(예: 퇴사할게여)도 노래에 맞춰 넘어가게 | ✅ 자동 싱크 `web/js/autosync.js` (아래) |
 | 15 | 1.2.1: 휴대폰에서 좌우로 밀어 홈 · 음장 · EQ · 설정 이동, 로고를 리퀴드 글라스 느낌으로 | ✅ 아래 1.2.1 절 (로고는 1.2.2 에서 다시 바꿈) |
 | 16 | 1.2.2: 아이콘을 새 구글 캘린더 · 드라이브처럼(그라데이션) — 시안 중 B(초록 · 노랑 · 파랑), 다크/화이트 모드에 맞춰 바탕 검정/흰색 | ✅ 아래 1.2.2 절 |
-| 17 | 1.2.2: 재생 버튼을 울림 표시로 — 재생 중 물결이 움직이고, 멈추면 세모로 서서히 바뀜 | ✅ 아래 1.2.2 절 |
+| 17 | 1.2.2: 재생 버튼을 울림 표시로 — 재생 중 물결이 움직이고, 멈추면 세모로 서서히 바뀜 | ✅ 아래 1.2.2 절 (1.2.3 에서 물결을 단계식으로) |
+| 18 | 1.2.3: PC 메모리 200MB 넘음 → 100MB 목표로 가볍게, 모바일도, 모든 기능 오류 · 끊김 없이 | ✅/△ 아래 1.2.3 절 — 크게 줄었지만 Electron 기본만 윈도우에서 약 100MB 라 '100MB 이내'는 확인 못 함 |
+| 19 | 1.2.3: 모바일 백그라운드 재생 · 앱 켜 둘 때 발열 | ✅ 알림 갱신 · 백그라운드 화면 일 · 재생 버튼 애니메이션 · 꺼진 효과 처리기 정리 |
+| 20 | 1.2.3: 백그라운드에서 가사 불러오기 자동으로 끄기 | ✅ 화면이 안 보이면 가사 찾기 · 자동 맞춤을 미루고 다시 보일 때 |
+| 21 | 1.2.3: 모바일 데이터에서는 기본으로 가사를 불러오지 않기 + 설정으로 켜고 끄기 | ✅ 설정 → 가사 → 모바일 데이터에서 가사 불러오기 (기본 끔) |
+| 22 | 1.2.3: 알림 재생 컨트롤에 무작위 · 반복 버튼, 위치 · 크기 깔끔하게 | ✅ 무작위 · 이전 · 재생 · 다음 · 반복, 앱 모양 벡터 아이콘 |
+| 23 | 1.2.3: 홈의 재생 중 플레이리스트 테두리가 위 막대를 뚫고 보임 | ✅ `.scroller` · `.mosaic` 에 `isolation: isolate` |
+| 24 | 1.2.3: 용량을 전체적으로 줄이기 | ✅ 아래 1.2.3 '용량' — 설치 파일 105→96MB, 설치 후 디스크 약 310→150MB(윈도우 압축, 추정), APK 655→389KB, 앨범아트 저장 중복 제거 |
 
 ## 2. 구조 요약
 
@@ -147,6 +154,80 @@ APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관�
   (뒤 빛 굴절 · 젖빛 · 왼쪽 위 반짝임 · 그림자 · 색 그림자), 바깥 타일은 유리판 테두리. 만드는 것: `assets/icon-1024 · icon-256 · exe_16/32/48/256 ·
   ullim.ico · ic_launcher_*`, `web/img/icon.png`, 안드로이드 `mipmap-*/ic_launcher.png`(옛 기기) + 적응형 `drawable-*/ic_launcher_bg · _fg · _mono`
   (`mipmap-anydpi-v26/ic_launcher.xml`, 단색은 안드로이드 13 테마 아이콘용). 알림 아이콘(ic_stat) · 작업 표시줄 버튼은 그대로(평면이어야 함).
+
+### 1.2.3 — 가볍게(메모리 · 발열) · 가사 데이터 절약 · 알림 무작위/반복
+측정: 리눅스 Electron(xvfb) 에서 `test/mem_driver.js`(개발자 도구를 붙이지 않고 앱 안에서 /proc 의 USS 합계 — Playwright 로 띄우면 Network 도메인이
+받은 내용을 렌더러에 쌓아 실제보다 크게 나옴) · `test/cpu_probe.js`. 라이브러리 = JamendoLyrics 22곡(여러 형식 + 3000px 그림) + 짧은 곡 300.
+
+| 장면 (전체 USS MB) | 1.2.2 | 1.2.3 |
+|---|---|---|
+| 시작 | 205 (프로세스 7) | 183 (5) |
+| 곡 322개 추가 · 홈 | 268~292 | 199 |
+| 재생 / 재생 화면 | 329 / 378 | 214 / 226 |
+| 자동 맞춤(4분 MP3) 최고 → 뒤 | 536 → 402 | 258 → 226 |
+| 곡 14번 바꾼 뒤 | 624 | 210 |
+| 효과 40개 켬 → 끔 | 685 → 678 | 282 → 254 |
+
+| CPU (코어 하나 = 100%, 소프트웨어 그리기) | 1.2.2 | 1.2.3 |
+|---|---|---|
+| 휴대폰 크기 · 재생 중 홈 | 30.6 | 6.7 |
+| 휴대폰 크기 · 재생 화면 | 28.1 | 14.9 |
+| PC · 재생 중 홈 (재생 막대 비주얼라이저 포함) | 106 | 78 |
+
+- 앨범아트(`thumbs.js`): `decodeNear` = WebCodecs `ImageDecoder` 에 원하는 크기를 주면 JPEG 를 1/8 단위로 줄여 바로 풂(원본 크기 버퍼 없음),
+  없으면 `createImageBitmap`. 캔버스는 쓰임새마다 하나를 돌려 씀. 재생 중 곡의 큰 그림 `bigArt` = 768px JPEG(최근 3곡만, 30초 뒤 주소 해제) →
+  재생 막대 · 재생 화면 · `mediaSession` · 안드로이드 알림(그대로 data URL, 다시 안 풂). 원본 그림 바이트는 `tagMemo` 에 남기지 않음.
+  예전에는 원본 blob 을 `<img>` 와 미디어 세션에 줘서 곡마다 34MB 짜리 풀린 그림이 캐시에 쌓였음.
+- 태그(`tags.js`): `readTags(src, { picture: false })` — ID3 는 프레임 머리만 읽고 APIC 는 건너뜀, FLAC PICTURE 블록 · MP4 covr 도 건너뜀(MP4 는
+  moov 가 크면 상자 머리만 읽으며 필요한 것만). 읽기 조각 32KB 미리 읽기(최근 2조각). 51개 시험 파일로 결과가 예전과 같음을 확인.
+- 자동 맞춤: `chunkdec.js` 가 형식별로 15초씩 잘라 `decodeAudioData`(8kHz) → `FeatStream`(`autosync.js`, 예전 `featuresFromPCM` 과 숫자까지 같음).
+  MP3/ADTS 프레임 · M4A(샘플 표 → ADTS, Range) · FLAC(STREAMINFO 머리 + 프레임, CRC-8 로 경계 확인) · Ogg(머리 페이지 + 페이지, granule) · WAV(머리 다시 붙임).
+  예열 프레임(MP3 10 · AAC 3 · Ogg 3페이지)을 앞에 붙여 풀고, 풀린 소리의 끝을 조각 끝에 맞춤. 첫 조각은 코덱 지연(LAME 앞 여백 + 529, AAC 1024)만큼
+  버림 → 통째로 풀 때와 상관 1.000 (모든 형식). 읽기는 BYOB 로 버퍼 하나를 돌려 씀. 모르는 형식(ALAC 등)은 100초 이하만 예전처럼 통째로.
+- 효과(`engine.js`): 워클릿은 그 효과를 처음 켤 때 `ensureWorklet`(소리를 줄인 채). 체인에서 빠진 효과는 `_dispose` — 워클릿 처리기에 'stop' 을
+  보내 `process()` 가 false 를 돌려 처리 목록에서 빠짐(전에는 끈 효과도 계속 돌았음). 분석기는 비주얼라이저가 그릴 때만 연결(`setTap`).
+- PC(`main.js`): `NetworkServiceInProcess2` · `AudioServiceOutOfProcess` 끔(프로세스 2개 줄임), `--expose-gc`. `memHint()`(곡 추가 · 그림 · 자동 맞춤 ·
+  효과 · 곡 바뀜 뒤, 15초에 한 번, 쉬는 시간)에 gc + `trim-memory` IPC → `scheduleTrim`: debugger 로 `Memory.simulatePressureNotification({level:'critical'})`
+  하나만 보내고 뗌(30초에 한 번까지), 창을 내릴 때도. 'moderate' 는 거의 효과 없음. 비운 뒤 화면 깨짐 없음(캡처로 확인).
+- 발열: `onTime` 은 화면이 안 보이면 화면 갱신을 하지 않음(보일 때 한 번에). 알림에 위치를 보내는 것은 30초에 한 번(어긋남 보정용)만.
+  `PlaybackService.apply` 는 메타데이터 · 재생 상태 · 알림을 바뀐 것만 다시 보냄(예상 위치와 1.5초 넘게 다르면 위치), 그림은 512px 근처로 풂.
+  재생 버튼 물결: 겹친 그림 셋(`.pgc` · `.pgw.w1` · `.w2`), 재생 중에는 `pgIn` · `pgOut` 이 `steps(1)` 로 0.4초마다 한 칸 — 부드러운 숨쉬기(초당 25번)는
+  유리 막대를 계속 다시 합성해 휴대폰 렌더링 비용의 80% 였음. 휴대폰 미니 진행선 1초에 한 번.
+- 가사: `loadLyrics` 는 `document.hidden` 이면 `LY.key = null` 로 미루고 `visibilitychange` 에서 다시. `maybeAutoSync` 도 숨겨져 있으면 안 함.
+  모바일 데이터 = 안드로이드 `Bridge.net()`(ConnectivityManager, TRANSPORT_CELLULAR) + `registerDefaultNetworkCallback` → `__ullimNet`. 데이터이고
+  `S.lyrOnData`(기본 false)가 아니면 `LY.state = 'data'`(전에 찾아 둔 가사는 보여 줌) — 와이파이가 되면 다시, [지금 찾기]는 force. 의견 다시 보내기도 미룸.
+  **권한 `ACCESS_NETWORK_STATE` 추가**(사용자에게 묻지 않는 일반 권한).
+- 알림: 액션 = 무작위 · 이전 · 재생 · 다음 · 반복(접힌 보기 1 · 2 · 3), 아이콘 `res/drawable/ic_n_*.xml`(앱 아이콘 모양, 꺼짐은 투명도 0.42).
+  안드로이드 13+ 는 `PlaybackState` 사용자 동작 shuffle · repeat 가 4 · 5번 칸. JS 는 `nowPlaying` 에 `shuffle` · `repeat` · `rate`, 명령 'shuffle' · 'repeat'.
+  닫기 버튼 대신 멈춘 채 15분이면 `shutdown()`(+ 지우기 의도 deleteIntent).
+- 시험: `test/lyrics_data_test.py`(데이터 · 와이파이 전환 · 설정 · [지금 찾기] · 백그라운드 · 알림 무작위/반복), `test/mem_driver.js`, `test/cpu_probe.js`.
+
+#### 용량 (1.2.3)
+| | 1.2.2 | 1.2.3 |
+|---|---|---|
+| 윈도우 설치 파일 | 104.8MB | 95.8MB |
+| 설치 폴더 (파일 크기 합) | 325MB (310MiB) | 293MB (279MiB) |
+| 설치 폴더 (디스크, 설정 > 앱) | 같음 | 약 150MB (XPRESS16K 추정 — zlib 16KB 조각으로 어림, 실제 윈도우에서 확인 못 함) |
+| APK | 655KB | 389KB |
+
+- `build/build_windows.sh` 가 `dxcompiler.dll`(·`dxil.dll`) · `vk_swiftshader.dll` · `vk_swiftshader_icd.json` · `vulkan-1.dll` 을 뺌. DXC 는 WebGPU(D3D12)
+  셰이더용, SwiftShader/Vulkan 은 그래픽 카드를 못 쓸 때 WebGL · WebGPU 를 CPU 로 흉내 내는 것 — 울림은 둘 다 안 씀. 화면 그리기(ANGLE · D3D11)가
+  쓰는 `d3dcompiler_47.dll` 은 남김. 그래픽 카드를 못 쓰면 Chromium 은 소프트웨어 합성으로 그림 — 리눅스 Electron 에서 같은 부품을 빼고
+  xvfb(그래픽 카드 없음)로 `electron_test` · `electron_theme_test` 통과, 화면 캡처 정상(`getGPUFeatureStatus` = 모두 software).
+- 설치 프로그램(`ullim.nsi`): 예전 버전이 넣은 위 부품 · `locales` 폴더를 지우고 복사(업데이트로도 줄어듦) → `compact.exe /C /I /Q /EXE:XPRESS16K`
+  로 `*.exe *.dll *.dat *.bin *.html` 압축(WOF — 윈도우 10 부터 기본, 읽을 때 커널이 풀어 줌, 이미지 페이지 공유 · 메모리 그대로, NTFS 가 아니거나
+  실패하면 그대로) → `EstimatedSize` = 파일마다 `GetCompressedFileSizeW`(4KB 올림) 합(`${Locate}` + `SumDiskSize`), 0 이면 예전처럼 `${GetSize}`.
+  LZX 는 조금 더 작지만 압축 · 첫 실행이 느려서 XPRESS16K. 설치 시간 몇 초 늘어남.
+- `test/wine_installer_test.sh <이전 설치 파일> <새 설치 파일>`: wine 11(wow64)으로 이전 버전 설치 → 새 버전 /S 덮어 설치 → 빠진 부품 · 언어 파일 ·
+  파일 내용 · 크기 기록 확인 → 제거. wine 에는 compact.exe 가 없어 압축 단계는 실패하고 넘어가는 경로가 시험됨. Mono/Gecko 설치 창이 뜨면 멈추므로
+  `WINEDLLOVERRIDES="mscoree=;mshtml="`.
+- 인터넷 캐시 `--disk-cache-size` 8MB (음악 · 화면은 app:// 이라 원래 안 쌓이지만 가사 요청 등이 오래 쌓이지 않게).
+- 로고 `web/img/icon*.png` 512px → 128px(화면에는 30px), 데스크톱 `assets/` 에 같은 PNG 를 두 번 넣지 않음(리눅스 창 아이콘은 web/img 것).
+  안드로이드 아이콘 리소스는 무손실 WebP(보이는 픽셀 같음, `make_icons.py` 의 `save_res`).
+- 앨범아트(`thumbs.js`): 그림 바이트 해시(길이 + 32비트 둘, 1MB 넘으면 고르게 골라 읽음)로 `#art#…` 기록 하나 { blob, color }, 곡은 { ref, color }.
+  같은 해시가 있으면 풀지 않고 같이 씀(CPU도 절약). 예전 곡별 기록은 `mergeOld` 가 한 번(`ullim.thumbs.merged`), 화면이 보이고 그림을 만들지
+  않을 때 100개씩 — 작은 그림 바이트 해시로 묶음. 같은 앨범이라도 형식마다 그림을 다르게 넣은 파일(예: mp3 는 JPEG, flac 은 PNG)은 따로 남음.
+  `test/thumbs_dedupe_test.py`. 대표 색을 읽는 캔버스는 `willReadFrequently`(GPU 되읽기 경고 없앰).
 
 ### 1.2.2 — 그라데이션 아이콘(다크/화이트) · 울림 재생 버튼
 - 아이콘: `build/make_icons.py` 기본이 `--style=gradient --palette=green`(시안 B). 울림 기호(점 + 물결 2겹)를 둥근 막대로 그리고, 색은 자리마다

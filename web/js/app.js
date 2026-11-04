@@ -7,11 +7,11 @@ import { platform } from './platform.js';
 import { ICONS, icon } from './icons.js';
 import { fetchLatest, isNewer } from './update.js';
 import { lens, setGlass, watchPower, isSaving } from './glass.js';
-import { thumb, peek, setSource as setThumbSource, setTagSink, forgetPending, fallbackStyle } from './thumbs.js';
+import { thumb, peek, setSource as setThumbSource, setTagSink, forgetPending, fallbackStyle, bigArt, setIdleHook } from './thumbs.js';
 import { autoSync, saveAnchors, applyAnchors } from './autosync.js';
 import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO, LookupError, cacheShrink } from './lyrics.js';
 
-const VERSION = '1.2.2';
+const VERSION = '1.2.3';
 const $ = id => document.getElementById(id);
 const app = $('app');
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -48,7 +48,7 @@ const DEF_EQ = () => ({ on: false, preset: 'flat', p: Object.fromEntries([['prea
 const S = Object.assign({
   volume: 0.8, muted: false, repeat: 'all', shuffle: false, crossfade: 0, theme: 'system', accent: 'blue',
   fxOn: true, fx: { limiter: { on: true, p: defaultParams(FX_BY_ID.limiter) } }, eq: DEF_EQ(), preset: null,
-  resume: true, lastKey: null, lastPos: 0, lyrAuto: true, lyrShare: true, lyrSync: true, lyrSize: 22, autoUpdate: true, lastVersion: null, updHidden: null, glass: 'auto',
+  resume: true, lastKey: null, lastPos: 0, lyrAuto: true, lyrShare: true, lyrSync: true, lyrOnData: false, lyrSize: 22, autoUpdate: true, lastVersion: null, updHidden: null, glass: 'auto',
 }, load(LS.set, {}));
 if (!S.eq || !S.eq.p) S.eq = DEF_EQ();
 if (!S.fx) S.fx = {};
@@ -191,7 +191,24 @@ const subLine = t => [t.artist, t.album].filter(Boolean).join(' · ') || '알 �
 const engine = new Engine();
 engine.setVolume(S.volume, S.muted);
 engine.addEventListener('fxerror', e => toast(`'${(FX_BY_ID[e.detail] || {}).name || e.detail}' 효과를 이 기기에서 쓸 수 없어요`));
-const P = { index: -1, xf: null, errors: 0, sleepAt: 0, sleepTimer: 0, sleepFading: false, artUrl: null, dragging: false, pDragging: false, lastSave: 0, lastReal: null, noted: null, seekAt: 0 };
+/* 메모리: 큰 일(곡 추가 · 그림 · 자동 맞춤 · 효과 바꿈 · 곡 바뀜)을 마치고 한가할 때 정리.
+   PC(Electron): 쓰레기를 바로 치우고(gc) 메인 프로세스에 캐시 비우기를 부탁 — 안 그러면 풀어 둔 그림 · 지난 곡 데이터 ·
+   GC 를 기다리는 큰 배열이 수십~수백 MB 씩 남는다. 15초에 한 번까지, 쉬는 시간에만. (안드로이드는 시스템이 알아서) */
+let gcT = 0, gcLast = 0;
+function memHint() {
+  if ((typeof globalThis.gc !== 'function' && !platform.trimMemory) || gcT) return;
+  const wait = Math.max(2500, 15000 - (Date.now() - gcLast));
+  gcT = setTimeout(() => {
+    const run = () => {
+      gcT = 0; gcLast = Date.now();
+      try { if (typeof globalThis.gc === 'function') globalThis.gc(); } catch (e) { /* noop */ }
+      if (platform.trimMemory) platform.trimMemory();
+    };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 4000 }); else run();
+  }, wait);
+}
+engine.addEventListener('chain', () => memHint());
+const P = { index: -1, xf: null, errors: 0, sleepAt: 0, sleepTimer: 0, sleepFading: false, artUrl: null, artBlob: null, dragging: false, pDragging: false, lastSave: 0, lastReal: null, noted: null, seekAt: 0 };
 const isPlaying = () => P.index >= 0 && !engine.deck.a.paused;
 
 engine.decks.forEach(deck => {
@@ -384,13 +401,16 @@ function endCrossfade() {
 
 function onTime() {
   const a = engine.deck.a;
-  if (!vizRAF) { updateTimeUI(); syncLyrics(); }
+  if (!vizRAF && !document.hidden) { updateTimeUI(); syncLyrics(); }      // 화면이 꺼져 있으면(백그라운드 재생) 화면 일은 하지 않음 — 다시 보일 때 한 번에
   if (!P.noted && a.currentTime > 5 && list[P.index]) { P.noted = true; noteRecent(list[P.index]); }
   if (S.crossfade > 0 && !P.xf && !a.paused && S.repeat !== 'one' && isFinite(a.duration) &&
       a.duration > S.crossfade * 2 + 3 && a.duration - a.currentTime <= S.crossfade + 0.3) startCrossfade();
   const now = Date.now();
-  if (now - P.lastSave > 5000) { P.lastSave = now; S.lastPos = a.currentTime; saveSettings(); pushNowPlaying(); }
+  if (now - P.lastSave > 5000) { P.lastSave = now; S.lastPos = a.currentTime; saveSettings(); }
+  // 알림 · 잠금 화면의 위치는 시스템이 재생 속도로 알아서 흘려보냄 → 재생 · 멈춤 · 이동 · 곡 바뀜 때만 알리고, 어긋남 보정은 가끔만
+  if (now - (P.lastPush || 0) > 30000) { P.lastPush = now; pushNowPlaying(); }
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && P.index >= 0) { updateTimeUI(true); syncLyrics(); } });
 
 /* ---------- 수면 타이머 ---------- */
 function setSleep(min) {
@@ -426,8 +446,8 @@ function pumpMeta() {
     const t = metaQ.shift();
     if (t.tagged || t.removed) continue;
     metaRunning++;
-    readTags(platform.tagSource(t.key)).then(info => applyTagsAll(t.key, info)).catch(() => { t.tagged = true; if (t.genre == null) t.genre = ''; })
-      .finally(() => { metaRunning--; scheduleRows(); saveList(); pumpMeta(); });
+    readTags(platform.tagSource(t.key), { picture: false }).then(info => applyTagsAll(t.key, info)).catch(() => { t.tagged = true; if (t.genre == null) t.genre = ''; })
+      .finally(() => { metaRunning--; scheduleRows(); saveList(); pumpMeta(); if (!metaRunning && !metaQ.length) memHint(); });
   }
 }
 function applyTags(t, info) {
@@ -440,49 +460,47 @@ function applyTags(t, info) {
   if (t === list[P.index]) renderNowPlaying();
   homeDirty();
 }
+setIdleHook(() => memHint());
 setTagSink((key, info) => {
   for (const p of pls) for (const t of p.tracks) if (t.key === key) { if (!t.tagged || t.genre == null) { applyTagsAll(key, info); saveList(); } return; }
 });
 const tagMemo = new Map();
+/** 곡의 태그 (가사 · 제목 …). 그림 바이트는 큰 그림을 만들 때 한 번 쓰고 버림 → 여기 남지 않음 */
 function tagInfo(t) {
   if (!tagMemo.has(t.key)) {
     tagMemo.set(t.key, readTags(platform.tagSource(t.key)).catch(() => null));
-    if (tagMemo.size > 8) tagMemo.delete(tagMemo.keys().next().value);
+    if (tagMemo.size > 4) tagMemo.delete(tagMemo.keys().next().value);
   }
   return tagMemo.get(t.key);
 }
-const artCache = new Map();
+/** 큰 그림 { url, blob } — 원본 대신 768px 로 줄인 것 (3000px 그림을 통째로 풀면 36MB) */
 async function getArt(t) {
-  if (artCache.has(t.key)) return artCache.get(t.key);
-  let url = null;
+  let pic = null;
   try {
     const info = await tagInfo(t);
     if (info && (!t.tagged || t.genre == null)) { applyTagsAll(t.key, info); scheduleRows(); saveList(); }
-    if (info && info.picture) url = URL.createObjectURL(new Blob([info.picture.data], { type: info.picture.mime }));
+    if (info) { pic = info.picture; info.picture = null; }
   } catch (e) { /* no art */ }
-  artCache.set(t.key, url);
-  if (artCache.size > 24) { const [k, v] = artCache.entries().next().value; if (v && v !== P.artUrl) URL.revokeObjectURL(v); artCache.delete(k); }
-  return url;
+  return bigArt(t.key, pic || undefined);
 }
 let artTok = 0;
 async function loadArt(t) {
   const img = $('artImg'), tok = ++artTok;
-  if (!t) { img.hidden = true; P.artUrl = null; renderPlayerArt(); setAmbient(null); return; }
-  const url = await getArt(t);
+  if (!t) { img.hidden = true; P.artUrl = null; P.artBlob = null; renderPlayerArt(); setAmbient(null); return; }
+  const art = await getArt(t);
   if (tok !== artTok) return;
-  P.artUrl = url;
+  const url = art ? art.url : null;
+  P.artUrl = url; P.artBlob = art ? art.blob : null;
   if (url) { img.src = url; img.hidden = false; } else img.hidden = true;
   renderPlayerArt();
   thumb(t.key).then(v => { if (tok === artTok) setAmbient(v && v.color); });
   updateMediaSession();
   pushNowPlaying(true);
+  memHint();
 }
-async function artDataUrl(url) {
-  const img = new Image(); img.src = url; await img.decode();
-  const c = document.createElement('canvas'), s = 320; c.width = c.height = s;
-  const g = c.getContext('2d'), r = Math.max(s / img.width, s / img.height);
-  g.drawImage(img, (s - img.width * r) / 2, (s - img.height * r) / 2, img.width * r, img.height * r);
-  return c.toDataURL('image/jpeg', 0.85);
+/** 알림용: 이미 줄인 큰 그림(JPEG)을 그대로 data URL 로 (다시 풀지 않음) */
+function artDataUrl(blob) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
 }
 
 /* ======================= 외부 연동 ======================= */
@@ -490,11 +508,11 @@ function pushNowPlaying(withArt) {
   if (!platform.nowPlaying) return;
   const t = list[P.index], a = engine.deck.a;
   const info = t ? {
-    hasTrack: true, title: displayTitle(t), artist: t.artist || '', album: t.album || '', playing: !a.paused,
+    hasTrack: true, title: displayTitle(t), artist: t.artist || '', album: t.album || '', playing: !a.paused, rate: a.playbackRate || 1, shuffle: !!S.shuffle, repeat: S.repeat || 'all',
     position: Math.round((a.currentTime || 0) * 1000), duration: Math.round((isFinite(a.duration) ? a.duration : t.duration || 0) * 1000),
   } : { hasTrack: false, playing: false };
   if (withArt && t && platform.name === 'android') {
-    if (P.artUrl) artDataUrl(P.artUrl).then(d => platform.nowPlaying({ ...info, art: d })).catch(() => platform.nowPlaying({ ...info, art: '' }));
+    if (P.artBlob) artDataUrl(P.artBlob).then(d => platform.nowPlaying({ ...info, art: d })).catch(() => platform.nowPlaying({ ...info, art: '' }));
     else platform.nowPlaying({ ...info, art: '' });
     return;
   }
@@ -504,7 +522,7 @@ function updateMediaSession() {
   if (!('mediaSession' in navigator)) return;
   const t = list[P.index];
   try {
-    navigator.mediaSession.metadata = t ? new MediaMetadata({ title: displayTitle(t), artist: t.artist || '', album: t.album || '', artwork: P.artUrl ? [{ src: P.artUrl, sizes: '512x512' }] : [] }) : null;
+    navigator.mediaSession.metadata = t ? new MediaMetadata({ title: displayTitle(t), artist: t.artist || '', album: t.album || '', artwork: P.artUrl ? [{ src: P.artUrl, sizes: '768x768', type: 'image/jpeg' }] : [] }) : null;
     navigator.mediaSession.playbackState = isPlaying() ? 'playing' : (t ? 'paused' : 'none');
   } catch (e) { /* noop */ }
 }
@@ -519,6 +537,8 @@ platform.onCommand((c, a) => {
   if (c === 'play') play(); else if (c === 'pause') pause(); else if (c === 'toggle') togglePlay();
   else if (c === 'next') next(); else if (c === 'prev') prev(); else if (c === 'stop') stop();
   else if (c === 'seek') seekTo((+a || 0) / 1000);
+  else if (c === 'shuffle') toggleShuffle();
+  else if (c === 'repeat') cycleRepeat();
 });
 platform.onOpenFiles(items => addItems(items, { play: true }));
 
@@ -555,21 +575,23 @@ function pgPath(t) {                          // t: 0 = 세모, 1 = 점
   }
   return d + 'Z';
 }
-const SVGNS = 'http://www.w3.org/2000/svg';
+/** 가운데 모양(점 ↔ 세모)과 물결 두 겹을 각각 따로 겹친 그림으로: 물결의 움직임은 합성기(GPU)가 투명도 · 크기만 바꿔
+    재생 막대(유리)를 다시 그리지 않음 — SVG 안에서 움직이면 막대 전체를 초당 수십 번 다시 그려 배터리 · 발열 */
 function playGlyph() {
-  const svg = document.createElementNS(SVGNS, 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'pg'); svg.setAttribute('aria-hidden', 'true');
-  svg.innerHTML = `<path class="core" d="${pgPath(0)}"/>`
-    + '<g class="waves"><g class="w1"><path d="M8.25 8.25A5.3 5.3 0 0 0 8.25 15.75"/><path d="M15.75 8.25A5.3 5.3 0 0 1 15.75 15.75"/></g>'
-    + '<g class="w2"><path d="M6.25 5.61A8.6 8.6 0 0 0 6.25 18.39"/><path d="M17.75 5.61A8.6 8.6 0 0 1 17.75 18.39"/></g></g>';
-  svg.__t = 0;
-  return svg;
+  const box = document.createElement('span');
+  box.className = 'pg'; box.setAttribute('aria-hidden', 'true');
+  const wave = (cls, d1, d2) => `<span class="pgw ${cls}"><svg viewBox="0 0 24 24"><path d="${d1}"/><path d="${d2}"/></svg></span>`;
+  box.innerHTML = `<svg class="pgc" viewBox="0 0 24 24"><path d="${pgPath(0)}"/></svg>`
+    + wave('w1', 'M8.25 8.25A5.3 5.3 0 0 0 8.25 15.75', 'M15.75 8.25A5.3 5.3 0 0 1 15.75 15.75')
+    + wave('w2', 'M6.25 5.61A8.6 8.6 0 0 0 6.25 18.39', 'M17.75 5.61A8.6 8.6 0 0 1 17.75 18.39');
+  box.__t = 0; box.__core = box.querySelector('.pgc path');
+  return box;
 }
 const PG = { state: null, raf: 0, timer: 0 };
 const easeIO = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 /** 재생 중이면 울림 표시(물결 움직임), 아니면 세모. animate: 바뀌는 모습을 보여 줄지 */
 function setPlayGlyph(playing, animate = true) {
-  const glyphs = [...document.querySelectorAll('svg.pg')];
+  const glyphs = [...document.querySelectorAll('.pg')];
   if (PG.state === playing) return;
   PG.state = playing;
   cancelAnimationFrame(PG.raf); clearTimeout(PG.timer);
@@ -578,11 +600,11 @@ function setPlayGlyph(playing, animate = true) {
   for (const g of glyphs) g.classList.toggle('ul', playing);
   // 재생: 물결이 다 펼쳐진 뒤 움직이기 시작 · 멈춤: 접히는 동안은 그대로 움직이다가 멈춤 (중간에 번쩍이지 않게)
   const done = () => glyphs.forEach(g => g.classList.toggle('on', playing));
-  if (reduce) { for (const g of glyphs) { g.__t = to; g.firstChild.setAttribute('d', pgPath(to)); } done(); return; }
+  if (reduce) { for (const g of glyphs) { g.__t = to; g.__core.setAttribute('d', pgPath(to)); } done(); return; }
   const t0 = performance.now(), delay = playing ? 0 : 70, dur = 360;
   const step = now => {
     const k = Math.min(1, Math.max(0, (now - t0 - delay) / dur)), t = from + (to - from) * easeIO(k);
-    for (const g of glyphs) { g.__t = t; g.firstChild.setAttribute('d', pgPath(t)); }
+    for (const g of glyphs) { g.__t = t; g.__core.setAttribute('d', pgPath(t)); }
     if (k < 1) PG.raf = requestAnimationFrame(step);
   };
   PG.raf = requestAnimationFrame(step);
@@ -642,15 +664,15 @@ function updateTimeUI(force) {
     if (!P.dragging) { const v = Math.round(frac * 1000); if (+seek.value !== v) { seek.value = v; paintRange(seek); } setText($('cur'), fmtTime(cur)); }
     setText($('dur'), fmtTime(d));
   }
-  if (force || now - progAt > 500) { progAt = now; $('pprogFill').style.transform = `scaleX(${frac})`; }
+  if (force || now - progAt > (narrow() ? 1000 : 500)) { progAt = now; $('pprogFill').style.transform = `scaleX(${frac})`; }   // 휴대폰 미니 플레이어 선: 1초에 한 번
   if (PL.open && !P.pDragging) { pSeek.value = Math.round(frac * 1000); paintRange(pSeek); setText($('pCur'), fmtTime(cur)); setText($('pDur'), fmtTime(d)); }
   if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && d && isPlaying() && Math.random() < 0.05) {
     try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(cur, d), playbackRate: a.playbackRate || 1 }); } catch (e) { /* noop */ }
   }
 }
-function toggleShuffle() { S.shuffle = !S.shuffle; order = []; saveSettings(); renderModes(); toast(S.shuffle ? '무작위 재생을 켰어요' : '무작위 재생을 껐어요'); if (PL.open && PL.tab === 'queue') renderQueue(); }
+function toggleShuffle() { S.shuffle = !S.shuffle; order = []; saveSettings(); renderModes(); pushNowPlaying(); toast(S.shuffle ? '무작위 재생을 켰어요' : '무작위 재생을 껐어요'); if (PL.open && PL.tab === 'queue') renderQueue(); }
 function cycleRepeat() {
-  S.repeat = { off: 'all', all: 'one', one: 'off' }[S.repeat] || 'all'; saveSettings(); renderModes();
+  S.repeat = { off: 'all', all: 'one', one: 'off' }[S.repeat] || 'all'; saveSettings(); renderModes(); pushNowPlaying();
   toast({ off: '반복 안 함', all: '전체 반복', one: '한 곡 반복' }[S.repeat]);
 }
 function bindSeek(r, dragKey, curId) {
@@ -1038,7 +1060,7 @@ function backfillGenres(lib = library()) {
   if (!t) return;
   GENRE_Q.busy = true; GENRE_Q.done.add(t.key);
   const idle = fn => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 1500 }) : setTimeout(fn, 60));
-  idle(() => readTags(platform.tagSource(t.key)).then(info => applyTagsAll(t.key, info)).catch(() => applyTagsAll(t.key, { genre: '' }))
+  idle(() => readTags(platform.tagSource(t.key), { picture: false }).then(info => applyTagsAll(t.key, info)).catch(() => applyTagsAll(t.key, { genre: '' }))
     .finally(() => {
       GENRE_Q.busy = false; saveList();
       const h = document.querySelector('#viewHome .ghint'), l2 = library(), pend = pendingGenres(l2);
@@ -2028,7 +2050,9 @@ function renderSettings() {
         segmented([[0, '끔'], [15, '15분'], [30, '30분'], [60, '1시간'], [90, '1시간 30분']], sleepVal, v => { setSleep(v); renderSettings(); })),
       srow('이어 듣기', '다시 열면 마지막 곡의 그 위치부터', switchEl(S.resume, v => { S.resume = v; saveSettings(); }, '이어 듣기'))),
     el('div', { class: 'sgroup' }, el('h3', {}, '가사'),
-      srow('인터넷에서 가사 자동으로 찾기', '곡이 바뀌면 제목 · 가수 · 앨범 · 길이로 LRCLIB(lrclib.net)와 다른 사용자들이 고른 가사 목록에서 찾아요', switchEl(S.lyrAuto, v => { S.lyrAuto = v; saveSettings(); }, '가사 자동으로 찾기')),
+      srow('인터넷에서 가사 자동으로 찾기', '곡이 바뀌면 제목 · 가수 · 앨범 · 길이로 LRCLIB(lrclib.net)와 다른 사용자들이 고른 가사 목록에서 찾아요 · 앱을 보고 있지 않을 때(백그라운드 재생)는 찾지 않아요', switchEl(S.lyrAuto, v => { S.lyrAuto = v; saveSettings(); }, '가사 자동으로 찾기')),
+      platform.network ? srow('모바일 데이터에서 가사 불러오기', '끄면 모바일 데이터로 연결돼 있을 때는 가사를 자동으로 찾지 않아요 (와이파이에 연결되면 찾아요 · 가사 화면의 [지금 찾기]는 언제든 돼요)',
+        switchEl(S.lyrOnData, v => { S.lyrOnData = v; saveSettings(); const t = list[P.index]; if (v && t && LY.state === 'data') loadLyrics(t); }, '모바일 데이터에서 가사 불러오기')) : '',
       srow('싱크 없는 가사 자동으로 맞추기', '시간 정보가 없는 가사는 노래를 한 번 분석해 줄마다 시간을 맞춰 따라 넘어가게 해요 (곡마다 한 번, 결과는 이 기기에만 저장)',
         switchEl(S.lyrSync, v => { S.lyrSync = v; saveSettings(); const t = list[P.index]; if (t && LY.key === t.key) loadLyrics(t); }, '싱크 없는 가사 자동으로 맞추기')),
       srow('내가 고른 가사를 다른 사용자와 나누기', '직접 고르거나 틀렸다고 한 가사를 자동으로 알려, 여러 사람이 고른 가사가 모두의 앱에 나와요. 곡 제목 · 가수 · 길이와 가사 번호만 익명으로 보내요.', switchEl(S.lyrShare, v => { S.lyrShare = v; saveSettings(); if (v) flushFeedback().catch(() => {}); }, '고른 가사 나누기'))),
@@ -2078,9 +2102,23 @@ async function localLyrics(t) {
   if (info && info.lyrics) { const l = toLyrics(info.lyrics, 'tag'); if (l.lines.length) return l; }
   return null;
 }
+/* 가사의 인터넷 사용: 화면이 꺼져 있으면(백그라운드 재생) 찾지 않고 다시 볼 때 찾음,
+   휴대폰이 모바일 데이터로 연결돼 있으면 설정('모바일 데이터에서 가사 불러오기')을 켰을 때만 자동으로 찾음 (직접 찾기는 언제든) */
+const onCellular = () => !!(platform.network && platform.network() === 'cellular');
+const lyricsNetOK = () => S.lyrOnData || !onCellular();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  const t = list[P.index];
+  if (t && LY.key !== t.key) loadLyrics(t);                // 백그라운드에서 미뤄 둔 가사
+});
+if (platform.onNetwork) platform.onNetwork(type => {
+  const t = list[P.index];
+  if (type !== 'cellular' && t && !document.hidden && LY.key === t.key && LY.state === 'data') loadLyrics(t);   // 와이파이에 연결되면 찾기
+});
 async function loadLyrics(t, { force = false, retry = false } = {}) {
   if (lyRetry) lyRetry();
   stopAutoSync();
+  if (t && document.hidden && !force) { LY.key = null; LY.tok++; LY.data = null; LY.state = 'idle'; return; }   // 다시 보일 때 (visibilitychange)
   const tok = ++LY.tok;
   LY.key = t ? t.key : null; LY.data = null; LY.idx = -1; LY.form = false; LY.fix = null; LY.prev = null; LY.slow = false;
   if (!t) { LY.state = 'idle'; renderLyrics(); return; }
@@ -2091,6 +2129,7 @@ async function loadLyrics(t, { force = false, retry = false } = {}) {
   if (c && !c.none && c.source === 'manual') return show(c);
   if (!force) { const local = await localLyrics(t); if (tok !== LY.tok) return; if (local) return show(local); }
   if (!S.lyrAuto && !force) return c && !c.none ? show(c) : show(null, c && c.none && c.manual ? 'none' : 'manual');
+  if (!force && !lyricsNetOK()) return c && !c.none ? show(c) : show(null, 'data');      // 모바일 데이터 — 전에 찾아 둔 가사만
   const q = guessQuery(t);
   const a = engine.deck.a;
   const dur = engine.deck.track === t && isFinite(a.duration) && a.duration > 0 ? a.duration : (t.duration || 0);
@@ -2163,6 +2202,8 @@ function renderLyrics() {
   else if (LY.state === 'manual') kids.push(msg('저장된 가사가 없어요', el('button', { class: 'btn', onclick: () => loadLyrics(t, { force: true }) }, icon('search'), '인터넷에서 찾기')));
   else if (LY.state === 'none') kids.push(msg('가사를 찾지 못했어요', el('div', { class: 'hint' }, '제목이나 가수 이름을 바꿔서 직접 검색해 보세요.' + (S.lyrShare ? ' 맞는 가사를 고르면 다른 사용자들에게도 그 가사가 나와요.' : '')),
     el('div', { class: 'tools' }, el('button', { class: 'btn', onclick: () => openLyricsForm(null) }, icon('search'), '직접 검색'), el('button', { class: 'btn ghost', onclick: () => { cacheDrop(t.key); loadLyrics(t, { force: true }); } }, '다시 찾기'))));
+  else if (LY.state === 'data') kids.push(msg('모바일 데이터로 연결돼 있어 가사를 찾지 않았어요', el('div', { class: 'hint' }, '와이파이에 연결되면 자동으로 찾아요 · 설정 → 가사에서 바꿀 수 있어요'),
+    el('button', { class: 'btn', onclick: () => loadLyrics(t, { force: true }) }, icon('search'), '지금 찾기')));
   else if (LY.state === 'offline') kids.push(msg('인터넷에 연결되어 있지 않아요', el('div', { class: 'hint' }, '연결되면 자동으로 다시 찾아요'),
     el('button', { class: 'btn', onclick: () => loadLyrics(t, { force: true }) }, '다시 시도')));
   else if (LY.state === 'busy') kids.push(msg('가사 서버(LRCLIB)가 지금 붐벼서 가사를 가져오지 못했어요', el('div', { class: 'hint' }, '30초 뒤 자동으로 다시 찾아볼게요'),
@@ -2205,7 +2246,7 @@ function trackDur(t) {
 function stopAutoSync() { if (LY.auto && LY.auto.ctrl) LY.auto.ctrl.abort(); LY.auto = null; }
 function maybeAutoSync() {
   const d = LY.data, t = list[P.index];
-  if (!S.lyrSync || !d || d.synced || d.instrumental || !t || LY.key !== t.key || (LY.auto && LY.auto.data === d)) return;
+  if (document.hidden || !S.lyrSync || !d || d.synced || d.instrumental || !t || LY.key !== t.key || (LY.auto && LY.auto.data === d)) return;
   if (d.lines.filter(l => l.text).length < 2 || !(trackDur(t) >= 20)) return;
   runAutoSync(t, d);
 }
@@ -2220,6 +2261,7 @@ async function runAutoSync(t, d) {
     Object.assign(A, { state: 'done', ctrl: null, times: r.times, anchors: r.anchors || [], method: r.method, confidence: r.confidence || 0 });
     applyAutoTimes(A);
     renderLyrics();                 // 설명은 가사 위 안내 줄에 (알림을 덮어쓰지 않게 토스트는 안 띄움)
+    memHint();
   } catch (e) {
     if (ctrl.signal.aborted || LY.auto !== A) return;
     A.state = 'failed'; A.ctrl = null;
@@ -2437,17 +2479,17 @@ function vizLoop() {
   const playing = isPlaying();
   updateTimeUI(); syncLyrics();
   const vis = VZ.filter(v => v.on() && v.w);
-  if (!vis.length) { vizRAF = 0; return; }             // 그릴 곳이 없으면 멈춤 (시간 · 가사는 timeupdate 로)
+  if (!vis.length) { vizRAF = 0; engine.setTap(false); return; }      // 그릴 곳이 없으면 멈춤 (시간 · 가사는 timeupdate 로)
   let e = 1;
   if ((++vizTick & 1) === 0 || !playing) {             // 30fps 면 충분 (배터리)
     if (playing) engine.analyser.getByteFrequencyData(fbuf);
     e = 0; for (const v of vis) e += drawViz(v, !playing);
   }
-  if (!playing && e < 0.05) { vizRAF = 0; for (const v of vis) drawViz(v, true); return; }
+  if (!playing && e < 0.05) { vizRAF = 0; engine.setTap(false); for (const v of vis) drawViz(v, true); return; }
   vizRAF = requestAnimationFrame(vizLoop);
 }
-function startViz() { if (!vizRAF && !document.hidden) vizRAF = requestAnimationFrame(vizLoop); }
-document.addEventListener('visibilitychange', () => { if (document.hidden) { cancelAnimationFrame(vizRAF); vizRAF = 0; } else if (isPlaying()) startViz(); });
+function startViz() { if (!vizRAF && !document.hidden) { engine.setTap(true); vizRAF = requestAnimationFrame(vizLoop); } }
+document.addEventListener('visibilitychange', () => { if (document.hidden) { cancelAnimationFrame(vizRAF); vizRAF = 0; engine.setTap(false); } else if (isPlaying()) startViz(); });
 
 /* ======================= 토스트 · 대화상자 · 메뉴 ======================= */
 let toastT = 0;
@@ -2567,7 +2609,7 @@ async function init() {
   go('home', { push: false });
   updateBadges();
   await engine.applyAll(S.fx, S.eq, !S.fxOn);
-  if (!engine.workletOK) toast('이 기기에서는 일부 음장 효과를 쓸 수 없어요');
+  if (!engine.workletSupported) toast('이 기기에서는 일부 음장 효과를 쓸 수 없어요');
   if (resumeKey && P.index < 0) {   // 그사이 사용자가 다른 곡을 틀었으면 건드리지 않음
     let i = list.findIndex(t => t.key === resumeKey);
     if (i < 0) {                     // 홈(최근 · 장르)에서 튼 곡이었으면 그 곡이 든 플레이리스트에서
@@ -2581,7 +2623,7 @@ async function init() {
   if (platform.startupFiles) { try { const items = await platform.startupFiles(); if (items.length) addItems(items, { play: true }); } catch (e) { /* noop */ } }
   if (platform.ready) platform.ready();
   VZ.forEach(v => drawViz(v, true));
-  if (S.lyrShare) setTimeout(() => flushFeedback().catch(() => {}), 15000);   // 인터넷이 끊겨 못 보낸 가사 의견 다시 보내기
+  if (S.lyrShare) setTimeout(() => { if (lyricsNetOK()) flushFeedback().catch(() => {}); }, 15000);   // 인터넷이 끊겨 못 보낸 가사 의견 다시 보내기 (모바일 데이터면 다음에)
   if (S.lastVersion && S.lastVersion !== VERSION && isNewer(VERSION, S.lastVersion)) setTimeout(() => toast(`울림 ${VERSION}(으)로 업데이트했어요`), 1500);
   if (S.lastVersion !== VERSION) { S.lastVersion = VERSION; saveSettings(); if (platform.update && platform.update.cleanup) platform.update.cleanup(); }
   if (platform.update) {
@@ -2676,4 +2718,4 @@ init();
 window.__ullim = { engine, S, get list() { return list; }, get pls() { return pls; }, get shown() { return shown; }, get playPl() { return playPl; },
   addItems, playIndex, playFromShown, applySoundPreset, go, back, P, NAV, PL, setTab: t => (t === 'list' ? showPlaylist(shown) : go(t)), showPlaylist, createPlaylist, renamePlaylist, deletePlaylist, duplicatePlaylist,
   addTracksTo, removeTracks, moveTrack, enterEdit, exitEdit, toggleSel, managePlaylists, toM3U, importPlaylists, checkUpdate, UPD,
-  openPlayer, closePlayer, setPlayerTab, playIn, renderHome, recentPl, genrePl, allSongsPl, genreGroups, library, get recent() { return recent; }, toggleSearch, LY, applyTheme, setPlayGlyph };
+  openPlayer, closePlayer, setPlayerTab, playIn, renderHome, recentPl, genrePl, allSongsPl, genreGroups, library, get recent() { return recent; }, toggleSearch, LY, applyTheme, setPlayGlyph, setGlassMode: () => setGlass(S.glass, narrow()) };

@@ -24,6 +24,13 @@ const isAudio = p => AUDIO_EXT.has(path.extname(p).slice(1).toLowerCase());
 app.setName('Ullim');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
+// 메모리: 네트워크 · 오디오 서비스를 따로 띄우지 않고 메인 프로세스 안에서 (프로세스마다 기본으로 10MB 넘게 듦)
+app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
+app.commandLine.appendSwitch('disable-features', 'AudioServiceOutOfProcess');
+// 화면이 한가할 때 쓰레기를 바로 치우도록 (큰 배열이 GC 를 기다리며 수십 MB 씩 쌓이는 것 막기) — web/js/platform.js gcHint
+app.commandLine.appendSwitch('js-flags', '--expose-gc');
+// 디스크: 인터넷 캐시는 8MB 까지만 (음악 · 화면 파일은 app:// 이라 캐시에 안 쌓이고, 가사는 앱이 따로 기억함)
+app.commandLine.appendSwitch('disk-cache-size', String(8 * 1024 * 1024));
 if (process.platform === 'win32') app.setAppUserModelId('kr.ullim.player');
 
 protocol.registerSchemesAsPrivileged([{
@@ -144,8 +151,31 @@ function saveBounds() {
   try { fs.writeFileSync(boundsFile(), JSON.stringify({ ...win.getNormalBounds(), maximized: win.isMaximized() })); } catch (e) { /* noop */ }
 }
 
+/* ---------- 메모리 정리 ----------
+   크로미움은 메모리가 모자랄 때만 캐시(풀어 둔 그림 · 지난 곡의 음악 데이터 · 글꼴 …)를 비운다. 그래서 곡을 여러 번 바꾸면
+   수십~수백 MB 가 남아 있음 → 큰 일을 마치고 한가할 때(화면이 부탁) · 창을 내렸을 때 '메모리 부족' 알림을 직접 보내 비우게 한다.
+   개발자 도구 창 없이 debugger 로 그 알림 하나만 보내고 바로 뗀다. 자주 하지 않음(30초에 한 번까지) */
+let trimT = 0, trimAt = 0;
+function scheduleTrim(delay = 4000) {
+  if (trimT) return;
+  const wait = Math.max(delay, 30000 - (Date.now() - trimAt));
+  trimT = setTimeout(async () => {
+    trimT = 0;
+    if (!win || win.isDestroyed()) return;
+    trimAt = Date.now();
+    const d = win.webContents.debugger;
+    try {
+      if (!d.isAttached()) d.attach('1.3');
+      await d.sendCommand('Memory.simulatePressureNotification', { level: 'critical' });
+    } catch (e) { /* 이미 개발자 도구가 붙어 있으면 건너뜀 */ }
+    try { if (d.isAttached()) d.detach(); } catch (e) { /* noop */ }
+  }, wait);
+}
+ipcMain.on('trim-memory', e => { if (win && !win.isDestroyed() && e.sender === win.webContents) scheduleTrim(); });
+
 /** 창 · 작업 표시줄 아이콘: 밝은 화면은 흰 바탕, 어두운 화면은 검은 바탕 (앱의 테마를 따름, 처음엔 윈도우 설정) */
-const windowIcon = light => path.join(ASSETS, process.platform === 'win32' ? (light ? 'ullim.ico' : 'ullim-dark.ico') : (light ? 'icon.png' : 'icon-dark.png'));
+const windowIcon = light => (process.platform === 'win32' ? path.join(ASSETS, light ? 'ullim.ico' : 'ullim-dark.ico')
+  : path.join(WEB, 'img', light ? 'icon.png' : 'icon-dark.png'));
 let themeLight = null;
 ipcMain.on('set-theme', (e, bg, light) => {
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
@@ -173,6 +203,7 @@ function createWindow() {
   win.once('ready-to-show', () => win.show());
   win.on('close', saveBounds);
   win.on('closed', () => { win = null; });
+  win.on('minimize', () => scheduleTrim(1500));          // 창을 내리면 화면용 캐시는 필요 없음
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('app://ullim/')) e.preventDefault(); });
   win.webContents.on('before-input-event', (e, input) => {

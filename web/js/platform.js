@@ -60,6 +60,8 @@ function electronPlatform() {
     findLrc: key => N.findLrc(key),
     openExternal: url => N.openExternal(url),
     setTheme: (bg, light) => { try { N.setTheme && N.setTheme(bg, light); } catch (e) { /* noop */ } },
+    // 한가할 때 캐시 비우기 (메인 프로세스가 '메모리 부족' 알림을 보내 줌 — desktop/main.js scheduleTrim)
+    trimMemory: () => { try { N.trimMemory && N.trimMemory(); } catch (e) { /* noop */ } },
     // 자동 업데이트: 설치 프로그램으로 설치한 앱에서만 (압축 파일 · 개발 실행은 제외)
     update: N.updateSupported ? {
       download: (url, sha256, size, version) => N.updateDownload(url, sha256, size, version),
@@ -80,6 +82,8 @@ function androidPlatform() {
   };
   W.__ullimCommand = (c, a) => emitCmd(c, a);
   W.__ullimOpen = json => { try { emitOpen(JSON.parse(json)); } catch (e) { /* noop */ } };
+  const netFns = [];
+  W.__ullimNet = t => { for (const f of netFns) { try { f(t); } catch (e) { /* noop */ } } };
   const call = (method, ...args) => new Promise((resolve, reject) => {
     const id = 'r' + (++seq);
     pending.set(id, { resolve, reject });
@@ -103,6 +107,9 @@ function androidPlatform() {
     exit: () => { try { A.exitApp(); } catch (e) { /* noop */ } },
     ready: () => { try { A.ready(); } catch (e) { /* noop */ } },
     powerSave: () => { try { return !!A.powerSave(); } catch (e) { return false; } },
+    // 연결 종류: 'wifi' · 'cellular' · 'other' · 'none' · 'unknown' — 바뀌면 onNetwork 로 알림
+    network: () => { try { return String(A.net() || 'unknown'); } catch (e) { return 'unknown'; } },
+    onNetwork: f => netFns.push(f),
     // 새 버전 알림만 (받기 · 설치는 브라우저 → 안드로이드 설치 화면)
     update: {
       versionCode: () => { try { return Number(A.versionCode()) || 0; } catch (e) { return 0; } },
