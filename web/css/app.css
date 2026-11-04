@@ -158,6 +158,20 @@ input, select { font: inherit; color: inherit; }
 .play { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--text); color: var(--bg); margin: 0 6px; transition: transform .1s; }
 .play:active { transform: scale(.94); }
 .play .i { width: 22px; height: 22px; }
+/* 재생 버튼: 울림 표시 ↔ 세모 (js: setPlayGlyph) */
+.pg { width: 28px; height: 28px; overflow: visible; }
+.pg .core { fill: currentColor; }
+.pg .waves path { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; transform-box: view-box; transform-origin: 12px 12px; }
+.pg .waves g { transform-box: view-box; transform-origin: 12px 12px; opacity: 0; transform: scale(.45); transition: opacity .2s ease-in, transform .22s ease-in; }
+.pg.ul .waves g { opacity: 1; transform: none; transition: opacity .26s ease-out, transform .34s cubic-bezier(.2, 1.4, .4, 1); }
+.pg.ul .waves .w1 { transition-delay: .14s; }
+.pg.ul .waves .w2 { transition-delay: .24s; }
+/* 재생 중: 물결이 퍼지듯 (초당 25번만 바꿔 유리 막대를 덜 다시 그림) */
+@keyframes pgWave { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .38; transform: scale(1.1); } }
+.pg.on .w1 path { animation: pgWave 1.6s steps(40, jump-none) infinite; }
+.pg.on .w2 path { animation: pgWave 1.6s steps(40, jump-none) .4s infinite; }
+:root.saving .pg.on .waves path { animation: none; }
+@media (prefers-reduced-motion: reduce) { .pg.on .waves path { animation: none; } .pg .waves g { transition: none; } }
 .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--ink); font-size: 11px; display: inline-grid; place-items: center; font-weight: 700; }
 
 /* ---------- 슬라이더 · 스위치 · 버튼 ---------- */
@@ -588,6 +602,7 @@ body.pl-open .side, body.pl-open .main { visibility: hidden; }
   .ctrl { align-self: center; gap: 0; }
   .pbar .play { width: 42px; height: 42px; background: none; color: var(--text); margin: 0; }
   .pbar .play .i { width: 26px; height: 26px; }
+  .pbar .play .pg { width: 30px; height: 30px; }
   .pbar .ib.big .i { width: 25px; height: 25px; }
   .editbar { left: 10px; right: 10px; bottom: calc(10px + var(--nav-h) + var(--mini-h) + 16px + env(safe-area-inset-bottom)); display: grid; gap: 8px; }
   .editbar .eh { justify-content: space-between; }
@@ -616,6 +631,7 @@ body.pl-open .side, body.pl-open .main { visibility: hidden; }
   .pl-ctrl { grid-area: ctrl; display: flex; align-items: center; justify-content: space-between; margin: 6px -6px 10px; }
   .pl-ctrl .play.big { width: 70px; height: 70px; margin: 0; }
   .pl-ctrl .play.big .i { width: 30px; height: 30px; }
+  .pl-ctrl .play.big .pg { width: 40px; height: 40px; }
   .pl-ctrl .ib.big { width: 54px; height: 54px; }
   .pl-ctrl .ib.big .i { width: 30px; height: 30px; }
   .pl-tabs { grid-area: tabs; margin: 0; }

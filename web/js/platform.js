@@ -59,7 +59,7 @@ function electronPlatform() {
     openPlaylists: () => N.openPlaylists(),
     findLrc: key => N.findLrc(key),
     openExternal: url => N.openExternal(url),
-    setTheme: () => {},
+    setTheme: (bg, light) => { try { N.setTheme && N.setTheme(bg, light); } catch (e) { /* noop */ } },
     // 자동 업데이트: 설치 프로그램으로 설치한 앱에서만 (압축 파일 · 개발 실행은 제외)
     update: N.updateSupported ? {
       download: (url, sha256, size, version) => N.updateDownload(url, sha256, size, version),

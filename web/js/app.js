@@ -11,7 +11,7 @@ import { thumb, peek, setSource as setThumbSource, setTagSink, forgetPending, fa
 import { autoSync, saveAnchors, applyAnchors } from './autosync.js';
 import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO, LookupError, cacheShrink } from './lyrics.js';
 
-const VERSION = '1.2.1';
+const VERSION = '1.2.2';
 const $ = id => document.getElementById(id);
 const app = $('app');
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -522,6 +522,73 @@ platform.onCommand((c, a) => {
 });
 platform.onOpenFiles(items => addItems(items, { play: true }));
 
+/* ======================= 재생 버튼: 울림 표시 ↔ 세모 =======================
+   재생 중 = 울림 표시(가운데 점 + 양쪽 물결), 물결이 퍼지듯 움직임. 멈추면 물결이 안으로 접히며 점이 세모로 바뀜 (모션 그래픽).
+   점 ↔ 세모는 가운데에서 본 각도마다 거리(r)를 섞어 그린다 (두 모양 모두 가운데에서 보이는 '별 모양'이라 자연스럽게 이어짐) */
+const PG_N = 72, PG_C = 12;
+const PG_DOT = 2.7;
+const PG_TRI = (() => {                       // 둥근 세모 (재생 표시) — 가운데에서 각 방향으로 가장자리까지의 거리
+  const A = [8.9, 6.4], B = [8.9, 17.6], C = [18.6, 12], rc = 1.25;
+  const cx = (A[0] + B[0] + C[0]) / 3, cy = (A[1] + B[1] + C[1]) / 3;
+  const shrink = v => [cx + (v[0] - cx) * 0.82, cy + (v[1] - cy) * 0.82];      // 모서리를 둥글게 하려고 조금 작게 → rc 만큼 부풀림
+  const [a, b, c] = [A, B, C].map(shrink);
+  const sdSeg = (px, py, x1, y1, x2, y2) => {
+    const dx = x2 - x1, dy = y2 - y1, t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(px - x1 - dx * t, py - y1 - dy * t);
+  };
+  const inside = (px, py) => { const s1 = (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0]), s2 = (c[0] - b[0]) * (py - b[1]) - (c[1] - b[1]) * (px - b[0]), s3 = (a[0] - c[0]) * (py - c[1]) - (a[1] - c[1]) * (px - c[0]); return (s1 >= 0 && s2 >= 0 && s3 >= 0) || (s1 <= 0 && s2 <= 0 && s3 <= 0); };
+  const sd = (px, py) => { const d = Math.min(sdSeg(px, py, ...a, ...b), sdSeg(px, py, ...b, ...c), sdSeg(px, py, ...c, ...a)); return (inside(px, py) ? -d : d) - rc; };
+  const r = new Float32Array(PG_N);
+  for (let i = 0; i < PG_N; i++) {
+    const ph = i / PG_N * Math.PI * 2, ux = Math.cos(ph), uy = Math.sin(ph);
+    let lo = 0, hi = 12;
+    for (let k = 0; k < 30; k++) { const mid = (lo + hi) / 2; if (sd(PG_C + ux * mid, PG_C + uy * mid) < 0) lo = mid; else hi = mid; }
+    r[i] = lo;
+  }
+  return r;
+})();
+function pgPath(t) {                          // t: 0 = 세모, 1 = 점
+  let d = '';
+  for (let i = 0; i < PG_N; i++) {
+    const ph = i / PG_N * Math.PI * 2, r = PG_TRI[i] + (PG_DOT - PG_TRI[i]) * t;
+    d += (i ? 'L' : 'M') + (PG_C + Math.cos(ph) * r).toFixed(2) + ' ' + (PG_C + Math.sin(ph) * r).toFixed(2);
+  }
+  return d + 'Z';
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function playGlyph() {
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'pg'); svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = `<path class="core" d="${pgPath(0)}"/>`
+    + '<g class="waves"><g class="w1"><path d="M8.25 8.25A5.3 5.3 0 0 0 8.25 15.75"/><path d="M15.75 8.25A5.3 5.3 0 0 1 15.75 15.75"/></g>'
+    + '<g class="w2"><path d="M6.25 5.61A8.6 8.6 0 0 0 6.25 18.39"/><path d="M17.75 5.61A8.6 8.6 0 0 1 17.75 18.39"/></g></g>';
+  svg.__t = 0;
+  return svg;
+}
+const PG = { state: null, raf: 0, timer: 0 };
+const easeIO = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+/** 재생 중이면 울림 표시(물결 움직임), 아니면 세모. animate: 바뀌는 모습을 보여 줄지 */
+function setPlayGlyph(playing, animate = true) {
+  const glyphs = [...document.querySelectorAll('svg.pg')];
+  if (PG.state === playing) return;
+  PG.state = playing;
+  cancelAnimationFrame(PG.raf); clearTimeout(PG.timer);
+  const reduce = !animate || matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const from = glyphs.length ? glyphs[0].__t : 0, to = playing ? 1 : 0;
+  for (const g of glyphs) g.classList.toggle('ul', playing);
+  // 재생: 물결이 다 펼쳐진 뒤 움직이기 시작 · 멈춤: 접히는 동안은 그대로 움직이다가 멈춤 (중간에 번쩍이지 않게)
+  const done = () => glyphs.forEach(g => g.classList.toggle('on', playing));
+  if (reduce) { for (const g of glyphs) { g.__t = to; g.firstChild.setAttribute('d', pgPath(to)); } done(); return; }
+  const t0 = performance.now(), delay = playing ? 0 : 70, dur = 360;
+  const step = now => {
+    const k = Math.min(1, Math.max(0, (now - t0 - delay) / dur)), t = from + (to - from) * easeIO(k);
+    for (const g of glyphs) { g.__t = t; g.firstChild.setAttribute('d', pgPath(t)); }
+    if (k < 1) PG.raf = requestAnimationFrame(step);
+  };
+  PG.raf = requestAnimationFrame(step);
+  PG.timer = setTimeout(done, playing ? 520 : 260);
+}
+
 /* ======================= 화면: 재생 막대 (PC) · 미니 플레이어 (휴대폰) ======================= */
 const seek = $('seek'), vol = $('vol'), pSeek = $('pSeek'), scroller = $('scroller');
 function paintRange(r, center) {
@@ -554,7 +621,8 @@ function onTrackChange() {
 }
 function onPlayState() {
   const playing = isPlaying();
-  for (const id of ['btnPlay', 'pPlay']) { setIcon($(id), playing ? 'pause' : 'play'); $(id).setAttribute('aria-label', playing ? '일시정지' : '재생'); }
+  for (const id of ['btnPlay', 'pPlay']) $(id).setAttribute('aria-label', playing ? '일시정지' : '재생');
+  setPlayGlyph(playing);
   document.body.classList.toggle('playing', playing);
   const qn = PL.open && document.querySelector('#pQueue .qrow.cur .nowp');
   if (qn) qn.replaceChildren(icon(playing ? 'vol' : 'pause'));
@@ -598,7 +666,8 @@ function bindSeek(r, dragKey, curId) {
   });
 }
 function renderTransport() {
-  for (const [id, ic] of [['btnPlay', 'play'], ['btnPrev', 'prev'], ['btnNext', 'next'], ['btnShuffle', 'shuffle'], ['pPlay', 'play'], ['pPrev', 'prev'], ['pNext', 'next'], ['pShuffle', 'shuffle'],
+  for (const id of ['btnPlay', 'pPlay']) $(id).replaceChildren(playGlyph());
+  for (const [id, ic] of [['btnPrev', 'prev'], ['btnNext', 'next'], ['btnShuffle', 'shuffle'], ['pPrev', 'prev'], ['pNext', 'next'], ['pShuffle', 'shuffle'],
     ['btnLyr', 'lyrics'], ['btnExpand', 'up'], ['pClose', 'chevDown'], ['pMore', 'more'], ['btnBack', 'back'], ['btnAdd', 'plus'], ['btnFind', 'search'], ['sideNew', 'plus']]) setIcon($(id), ic);
   $('btnPlay').onclick = $('pPlay').onclick = togglePlay;
   $('btnPrev').onclick = $('pPrev').onclick = prev;
@@ -2303,6 +2372,8 @@ function applyTheme() {
   const theme = S.theme === 'system' ? (mqDark.matches ? 'dark' : 'light') : S.theme;
   const root = document.documentElement;
   root.dataset.theme = theme; root.dataset.accent = S.accent; vizColor = '';
+  const logo = theme === 'dark' ? 'img/icon-dark.png' : 'img/icon.png';     // 로고 바탕: 밝은 화면 흰색 · 어두운 화면 검정
+  document.querySelectorAll('.brand img, link[rel=icon]').forEach(n => { if (n.tagName === 'LINK') n.href = logo; else if (!n.src.endsWith(logo)) n.src = logo; });
   if (platform.setTheme) platform.setTheme(getComputedStyle(root).getPropertyValue('--bg').trim(), theme === 'light');
   drawCurve();
 }
@@ -2605,4 +2676,4 @@ init();
 window.__ullim = { engine, S, get list() { return list; }, get pls() { return pls; }, get shown() { return shown; }, get playPl() { return playPl; },
   addItems, playIndex, playFromShown, applySoundPreset, go, back, P, NAV, PL, setTab: t => (t === 'list' ? showPlaylist(shown) : go(t)), showPlaylist, createPlaylist, renamePlaylist, deletePlaylist, duplicatePlaylist,
   addTracksTo, removeTracks, moveTrack, enterEdit, exitEdit, toggleSel, managePlaylists, toM3U, importPlaylists, checkUpdate, UPD,
-  openPlayer, closePlayer, setPlayerTab, playIn, renderHome, recentPl, genrePl, allSongsPl, genreGroups, library, get recent() { return recent; }, toggleSearch, LY };
+  openPlayer, closePlayer, setPlayerTab, playIn, renderHome, recentPl, genrePl, allSongsPl, genreGroups, library, get recent() { return recent; }, toggleSearch, LY, applyTheme, setPlayGlyph };

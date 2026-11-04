@@ -3,5 +3,5 @@
     <color name="bg">#FF0F1114</color>
     <color name="panel">#FF171A1F</color>
     <color name="accent">#FF4C9DFF</color>
-    <color name="ic_bg">#FF181C23</color>
+    <color name="ic_bg">#FFFFFFFF</color>
 </resources>

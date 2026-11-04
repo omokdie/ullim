@@ -1,6 +1,6 @@
 # 울림 — 작업 인계 문서 (Handoff)
 
-> 갱신: 2026-11-04 KST (1.2.0 준비). 다음 세션은 이 문서 → `README.md` → `RELEASING.md` → `lyrics/README.md` 순서로 읽으면 됩니다.
+> 갱신: 2026-11-04 KST (1.2.2 준비). 다음 세션은 이 문서 → `README.md` → `RELEASING.md` → `lyrics/README.md` 순서로 읽으면 됩니다.
 > 소스: **GitHub `omokdie/ullim` (공개, main)**. 클라우드 세션 작업 폴더 `/home/claude/ullim` (origin = 위 저장소).
 
 ## 1. 사용자 요구사항 (반영 상태)
@@ -21,6 +21,9 @@
 | 12 | 1.2.0: 아이폰 같은 리퀴드 글라스(휴대폰은 가벼운 굴절, 배터리 최소) | ✅ `web/js/glass.js` (자동 · 풍부 · 가볍게 · 끄기, 절약 모드에서 끔) |
 | 13 | 1.2.0: 한국 노래 가사를 잘 못 찾음 (예: 내가 바보라서 그래 feat KIXO) | ✅ 가수로 찾기 · 영어 번역/소리 제목 · 피처링 가수 · 파일 이름 (아래) |
 | 14 | 1.2.0: 싱크 없는 가사(예: 퇴사할게여)도 노래에 맞춰 넘어가게 | ✅ 자동 싱크 `web/js/autosync.js` (아래) |
+| 15 | 1.2.1: 휴대폰에서 좌우로 밀어 홈 · 음장 · EQ · 설정 이동, 로고를 리퀴드 글라스 느낌으로 | ✅ 아래 1.2.1 절 (로고는 1.2.2 에서 다시 바꿈) |
+| 16 | 1.2.2: 아이콘을 새 구글 캘린더 · 드라이브처럼(그라데이션) — 시안 중 B(초록 · 노랑 · 파랑), 다크/화이트 모드에 맞춰 바탕 검정/흰색 | ✅ 아래 1.2.2 절 |
+| 17 | 1.2.2: 재생 버튼을 울림 표시로 — 재생 중 물결이 움직이고, 멈추면 세모로 서서히 바뀜 | ✅ 아래 1.2.2 절 |
 
 ## 2. 구조 요약
 
@@ -144,6 +147,22 @@ APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관�
   (뒤 빛 굴절 · 젖빛 · 왼쪽 위 반짝임 · 그림자 · 색 그림자), 바깥 타일은 유리판 테두리. 만드는 것: `assets/icon-1024 · icon-256 · exe_16/32/48/256 ·
   ullim.ico · ic_launcher_*`, `web/img/icon.png`, 안드로이드 `mipmap-*/ic_launcher.png`(옛 기기) + 적응형 `drawable-*/ic_launcher_bg · _fg · _mono`
   (`mipmap-anydpi-v26/ic_launcher.xml`, 단색은 안드로이드 13 테마 아이콘용). 알림 아이콘(ic_stat) · 작업 표시줄 버튼은 그대로(평면이어야 함).
+
+### 1.2.2 — 그라데이션 아이콘(다크/화이트) · 울림 재생 버튼
+- 아이콘: `build/make_icons.py` 기본이 `--style=gradient --palette=green`(시안 B). 울림 기호(점 + 물결 2겹)를 둥근 막대로 그리고, 색은 자리마다
+  초록 · 민트 · 노랑 · 주황 · 파랑 점을 OKLCh(색상환 각도 평균)로 섞은 그라데이션 — 경계 없이 번짐. 타일은 초타원(n=5.6). 구글 로고의 모양 · 색을
+  그대로 쓰지는 않음(느낌만). 옛 유리 스타일은 `--style=glass`. `--preview --palettes=blue,green` 으로 시안 비교.
+- 다크/화이트: 같은 그림을 흰 바탕(`web/img/icon.png`, `assets/ullim.ico`)과 검은 바탕(`#0c0d10`: `web/img/icon-dark.png`, `assets/ullim-dark.ico`,
+  `assets/icon-dark-1024.png`) 두 벌로 만듦. 앱 안 로고 · 파비콘은 `applyTheme()` 가 테마에 맞춰 바꿈. PC 는 `platform.setTheme(bg, light)` →
+  IPC `set-theme` → `win.setBackgroundColor` + `win.setIcon(ullim(-dark).ico)` (같은 테마면 다시 넣지 않음, 처음엔 `nativeTheme`). 설치 파일 ·
+  바로 가기 아이콘은 흰 바탕 그대로(윈도우가 테마별 아이콘을 지원하지 않음). 안드로이드 적응형 아이콘 바탕은 `@color/ic_bg`
+  (`values/colors.xml` 흰색, `values-night/colors.xml` 검정) — 휴대폰 다크 모드를 따름. `drawable-*/ic_launcher_bg.png` 는 지움.
+- 재생 버튼(`#btnPlay` · `#pPlay`): `playGlyph()` SVG = 가운데 모양(`path.core`) + 물결 `g.w1`(r 5.3) · `g.w2`(r 8.6). 세모 ↔ 점은 가운데에서 본
+  각도 72개마다 거리를 섞어 그림(`PG_TRI` 를 둥근 세모의 거리장으로 한 번 계산, `pgPath(t)`) — 360ms, 멈출 때는 70ms 늦게 시작.
+  물결은 CSS 전환(`.pg.ul`: 펼칠 때 살짝 튀어나옴, 0.14 · 0.24초 차례로), 다 펼친 뒤(520ms) `.on` 이 붙어 `pgWave` 로 퍼지듯 움직임
+  (초당 25번만 바뀌게 `steps(40)` — 유리 막대 다시 그리기 줄임). 멈출 때는 물결이 접히는 동안(260ms) 움직임을 유지해 번쩍임 없음.
+  배터리 절약(`html.saving`, `glass.js watchPower`) · `prefers-reduced-motion` 이면 물결 움직임 없음. `onPlayState` → `setPlayGlyph(playing)`.
+- 시험: `test/play_glyph_test.py`(모양 · 중간 단계 · 빠른 연타 · 절약 모드 · 로고 바꿈), `test/electron_theme_test.js`(창 아이콘 · 바탕색).
 
 ### 1.2.0 — 한국 노래 가사 · 자동 싱크
 - `lyrics.js scanByArtist`: 제목으로 못 찾고 곡 길이를 알 때, 가수(괄호 안 다른 표기 · `aliases.js` · 제목 속 feat 가수)로 검색 →

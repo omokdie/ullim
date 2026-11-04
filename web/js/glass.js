@@ -93,6 +93,7 @@ export function lens(el, { light = false } = {}) {
 function resolve() {
   const reduce = reduceMq && reduceMq.matches;
   const m = pref === 'auto' ? (saving || reduce ? 'off' : phone ? 'light' : 'rich') : pref;
+  document.documentElement.classList.toggle('saving', saving);     // 배터리 절약 중: 재생 버튼 물결 움직임 등도 멈춤
   if (m !== mode || document.documentElement.dataset.glass !== m) {
     mode = m;
     document.documentElement.dataset.glass = m;

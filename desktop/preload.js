@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('ullimNative', {
   updateDownload: (url, sha256, size, version) => ipcRenderer.invoke('update-download', url, sha256, size, version),
   updateDiscard: () => ipcRenderer.invoke('update-discard'),
   updateRestart: () => ipcRenderer.send('update-restart'),
+  setTheme: (bg, light) => ipcRenderer.send('set-theme', String(bg || ''), !!light),
   onCommand: cb => ipcRenderer.on('command', (_e, cmd, arg) => cb(cmd, arg)),
   onOpenFiles: cb => ipcRenderer.on('open-files', (_e, paths) => cb(paths)),
 });

@@ -1,6 +1,6 @@
 'use strict';
 /* 울림 — Windows/데스크톱 메인 프로세스 (Electron) */
-const { app, BrowserWindow, protocol, ipcMain, dialog, Menu, nativeImage, shell, screen, net } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, dialog, Menu, nativeImage, shell, screen, net, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -144,13 +144,25 @@ function saveBounds() {
   try { fs.writeFileSync(boundsFile(), JSON.stringify({ ...win.getNormalBounds(), maximized: win.isMaximized() })); } catch (e) { /* noop */ }
 }
 
+/** 창 · 작업 표시줄 아이콘: 밝은 화면은 흰 바탕, 어두운 화면은 검은 바탕 (앱의 테마를 따름, 처음엔 윈도우 설정) */
+const windowIcon = light => path.join(ASSETS, process.platform === 'win32' ? (light ? 'ullim.ico' : 'ullim-dark.ico') : (light ? 'icon.png' : 'icon-dark.png'));
+let themeLight = null;
+ipcMain.on('set-theme', (e, bg, light) => {
+  if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
+  light = !!light;
+  if (/^#[0-9a-f]{6}$/i.test(bg)) win.setBackgroundColor(bg);
+  if (light === themeLight) return;
+  themeLight = light;
+  try { if (fs.existsSync(windowIcon(light))) win.setIcon(windowIcon(light)); } catch (err) { /* noop */ }
+});
+
 function createWindow() {
   const b = loadBounds() || {};
   win = new BrowserWindow({
     width: b.width || 1180, height: b.height || 760, x: b.x, y: b.y,
     minWidth: 380, minHeight: 560,
-    title: '울림', backgroundColor: '#0f1114', autoHideMenuBar: true, show: false,
-    icon: path.join(ASSETS, process.platform === 'win32' ? 'ullim.ico' : 'icon.png'),
+    title: '울림', backgroundColor: nativeTheme.shouldUseDarkColors ? '#07080a' : '#f3f4f7', autoHideMenuBar: true, show: false,
+    icon: windowIcon(!nativeTheme.shouldUseDarkColors),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,

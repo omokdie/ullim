@@ -48,6 +48,7 @@ python3 test/lyrics_korean_test.py             # 한국 노래: 영어 번역/�
 node test/autosync_test.mjs                    # 자동 싱크 (글자 수 · 머리말 · 맞춘 줄 · 합성 신호 정렬 · 속도)
 node test/autosync_bench.mjs                   # (선택) 자동 싱크 정확도 — JamendoLyrics 79곡이 /home/claude/f90/jamendolyrics 에 있을 때
 python3 test/playlists_test.py                 # 플레이리스트 여러 개 (가짜 안드로이드 연결층 · 저장 · 파일 권한)
+python3 test/play_glyph_test.py                # 재생 버튼 (울림 표시 ↔ 세모 · 물결 움직임 · 절약 모드) · 밝은/어두운 화면 로고
 python3 .github/scripts/lyrics_feedback.py selftest
 python3 test/lyrics_bot_test.py                # 가사 봇 전체 흐름 (가짜 GitHub · LRCLIB · ntfy)
 python3 test/android_bridge.py                 # 안드로이드 연결층 흉내
@@ -56,6 +57,7 @@ xvfb-run -a node test/electron_test.js <electron> build/desktop-app       # 실�
 xvfb-run -a node test/electron_ipc_test.js <electron> build/desktop-app   # 가사 의견 · 공용 목록 IPC
 xvfb-run -a node test/electron_playlist_test.js <electron> build/desktop-app /tmp/pltest   # M3U 내보내기 · 가져오기
 xvfb-run -a node test/electron_update_test.js <electron> build/desktop-app     # 자동 업데이트 (가짜 GitHub · 받기 · 거절 · 닫을 때 /S · 다시 시작 /RELAUNCH)
+xvfb-run -a node test/electron_theme_test.js <electron> build/desktop-app      # 테마에 맞춰 창 아이콘(흰/검은 바탕) · 창 바탕색
 ```
 
 ## 릴리스
