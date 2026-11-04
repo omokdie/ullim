@@ -18,6 +18,7 @@
 
 ```bash
 python3 build/make_icons.py      # (로고를 바꿀 때만) 모든 아이콘 다시 그리기 — --preview 로 미리 보기
+bash codec/build_codec.sh        # (코덱 엔진을 바꿀 때만) web/js/vendor/ullim-codec.wasm — FFmpeg n7.1.1 wasm (codec/README.md)
 bash build/build_windows.sh      # build/win/Ullim  (Electron win32-x64 + 앱, Ullim.exe 아이콘·버전 정보)
 bash build/build_installer.sh    # dist/Ullim-Setup-<버전>.exe  (NSIS, 약 5분)
 #   (1.2.3 부터 dxcompiler · SwiftShader · vulkan-1 은 빼고, 설치할 때 compact /EXE 로 압축 — HANDOFF '용량')
@@ -42,6 +43,9 @@ rm -f dist/*.idsig
 ```bash
 python3 test/server.py &                       # http://127.0.0.1:8766
 python3 test/run_dsp.py                        # 음장 효과 측정
+python3 test/fx_glitch_test.py http://127.0.0.1:8766/web/index.html   # 효과 켜고 끄기 끊김 · 튐 · 언더런 (녹음해서 셈)
+python3 test/preset_level_test.py              # 프리셋 음량 · 봉우리 · 안전망 (꽉 찬 음원 · 여유 있는 음원)
+python3 test/codec_test.py && python3 test/codec_test.py --no-jspi   # 코덱 엔진 (ffmpeg · node 필요)
 python3 test/ui_func.py                        # 화면 동작
 python3 test/lyrics_test.py                    # 가사 찾기 (LRCLIB 가짜 응답)
 python3 test/lyrics_share_test.py              # 공용 가사 목록 · 자동 의견 보내기 (가짜 응답)
@@ -62,6 +66,7 @@ xvfb-run -a node test/electron_ipc_test.js <electron> build/desktop-app   # 가�
 xvfb-run -a node test/electron_playlist_test.js <electron> build/desktop-app /tmp/pltest   # M3U 내보내기 · 가져오기
 xvfb-run -a node test/electron_update_test.js <electron> build/desktop-app     # 자동 업데이트 (가짜 GitHub · 받기 · 거절 · 닫을 때 /S · 다시 시작 /RELAUNCH)
 xvfb-run -a node test/electron_theme_test.js <electron> build/desktop-app      # 테마에 맞춰 창 아이콘(흰/검은 바탕) · 창 바탕색
+xvfb-run -a node test/electron_codec_test.js <electron> build/desktop-app      # 코덱 엔진을 app:// 로 (먼저 /tmp/codec 에 a.dsf · a.wv · a_alac.m4a)
 bash test/wine_installer_test.sh dist/Ullim-Setup-<이전>.exe dist/Ullim-Setup-<새>.exe   # 설치 프로그램: 덮어 설치(업데이트) · 빠진 부품 지움 · 크기 기록 · 제거 (wine)
 xvfb-run -a <electron> --no-sandbox test/mem_driver.js build/desktop-app /tmp/memlib   # (선택) 장면별 메모리 — 개발자 도구 없이 · --gc · --dump
 xvfb-run -a <electron> --no-sandbox test/cpu_probe.js build/desktop-app phone          # (선택) 재생 중 CPU (발열 비교)
@@ -73,6 +78,7 @@ xvfb-run -a <electron> --no-sandbox test/cpu_probe.js build/desktop-app phone   
 2. main 에 커밋 · 푸시.
 3. GitHub 저장소 → **Releases → Draft a new release** → **Choose a tag** 에 `v<버전>` 입력 후 *Create new tag* (대상 main)
    → 제목 · 설명 → `Ullim-Setup-<버전>.exe`, `Ullim-<버전>.apk` 를 끌어다 놓기 → **Publish release**.
+   (1.3.0 부터) FFmpeg 소스 묶음 `ffmpeg-n7.1.1-source.tar.xz`(코덱 엔진의 LGPL 소스, `git -C /tmp/wasm/ffmpeg archive --prefix=ffmpeg-n7.1.1/ n7.1.1 | xz`)도 함께.
    README 의 "최신 릴리스" 링크가 자동으로 새 버전을 가리킵니다.
 4. **자동 업데이트 알리기** — 릴리스에 두 파일이 올라간 **뒤에**:
    ```bash

@@ -2,6 +2,8 @@
  * 울림 — 음악 파일 태그/길이 읽기 (ID3v1/v2, FLAC, Ogg Vorbis/Opus, MP4/M4A, WAV)
  * 파일 전체를 읽지 않고 필요한 부분만 Range 요청으로 읽는다.
  * readTags(src, { picture: false }): 앨범아트는 읽지 않음 (목록에 곡을 넣을 때 — 그림 바이트를 메모리에 올리지 않게)
+ * info.fmt = { codec, rate, bits, ch, lossless, kbps } — 고음질 출력(DAC) 화면의 '파일' 칸
+ * 여기서 모르는 형식(APE · WavPack · DSD · AIFF · WMA …)은 setTagFallback 으로 정한 읽기(코덱 엔진)로
  */
 
 const td8 = new TextDecoder('utf-8');
@@ -255,6 +257,7 @@ async function parseFlac(rd, off, info, wantPic = true) {
         const sr = (b[10] << 12) | (b[11] << 4) | (b[12] >> 4);
         const total = (b[13] & 0x0f) * 4294967296 + be32(b, 14);
         if (sr) info.duration = total / sr;
+        info.fmt = { codec: 'FLAC', rate: sr, bits: (((b[12] & 1) << 4) | (b[13] >> 4)) + 1, ch: ((b[12] >> 1) & 7) + 1, lossless: true };
       } else if (type === 4) parseVorbisComment(b, 0, info);
       else parseFlacPicture(b, 0, info);
     }
@@ -288,8 +291,8 @@ async function parseOgg(rd, info, size, start = 0) {
     if (o > MAX_TAG) break;
   }
   const id = packets[0];
-  if (id && ascii(id, 1, 6) === 'vorbis') { kind = 'vorbis'; rate = le32(id, 12); }
-  else if (id && ascii(id, 0, 8) === 'OpusHead') { kind = 'opus'; rate = 48000; preskip = le16(id, 10); }
+  if (id && ascii(id, 1, 6) === 'vorbis') { kind = 'vorbis'; rate = le32(id, 12); info.fmt = { codec: 'Vorbis', rate, ch: id[11], kbps: Math.round(le32(id, 20) / 1000) || 0 }; }
+  else if (id && ascii(id, 0, 8) === 'OpusHead') { kind = 'opus'; rate = 48000; preskip = le16(id, 10); info.fmt = { codec: 'Opus', rate: 48000, ch: id[9] }; }
   const cm = packets[1];
   if (cm) {
     if (kind === 'vorbis' && ascii(cm, 1, 6) === 'vorbis') parseVorbisComment(cm, 7, info);
@@ -338,13 +341,24 @@ async function walkMp4(rd, s, e, depth, info, leaf) {
     const t = ascii(h, 4, 4);
     if (sz === 1) { sz = be32(h, 8) * 4294967296 + be32(h, 12); hdr = 16; }
     if (sz < 8 || p + sz > e) sz = e - p;
-    if (t === 'udta' || t === 'ilst' || t === 'trak' || t === 'mdia') await walkMp4(rd, p + hdr, p + sz, depth + 1, info, leaf);
+    if (t === 'udta' || t === 'ilst' || t === 'trak' || t === 'mdia' || t === 'minf' || t === 'stbl') await walkMp4(rd, p + hdr, p + sz, depth + 1, info, leaf);
     else if (t === 'meta') await walkMp4(rd, p + hdr + 4, p + sz, depth + 1, info, leaf);
+    else if (t === 'stsd') { if (sz <= 4096) { const b = await rd.read(p + hdr, sz - hdr); stsd(b, 0, b.length, info); } }
     else if (t === 'mvhd' || (depth >= 1 && t !== 'covr' && leaf.has(t))) {
       if (sz <= 1024 * 1024) { const b = await rd.read(p, sz); walkMoov(b, info, t === 'mvhd' ? 0 : 1); }
     }
     p += sz;
   }
+}
+/** 표본 설명(stsd): 첫 오디오 항목의 코덱 · 채널 · 비트 · 샘플레이트 */
+function stsd(b, s, e, info) {
+  const p = s + 8;                                   // 버전 · 플래그 · 항목 수
+  if (p + 36 > e || info.fmt) return;
+  const t = ascii(b, p + 4, 4), names = { mp4a: 'AAC', alac: 'ALAC', fLaC: 'FLAC', Opus: 'Opus', 'ac-3': 'AC-3', 'ec-3': 'E-AC-3', '.mp3': 'MP3' };
+  const f = { codec: names[t] || t.trim(), ch: be16(b, p + 24), bits: be16(b, p + 26), rate: be32(b, p + 32) >>> 16, lossless: t === 'alac' || t === 'fLaC' };
+  if (t === 'alac' && p + 36 + 36 <= e && ascii(b, p + 40, 4) === 'alac') { f.bits = b[p + 36 + 17]; f.rate = be32(b, p + 36 + 32); }   // ALAC 전용 상자
+  if (t === 'mp4a') delete f.bits;
+  info.fmt = f;
 }
 const ilstLeaf = new Set(['\u00a9nam', '\u00a9ART', '\u00a9alb', 'aART', 'trkn', '\u00a9lyr', '\u00a9gen', 'gnre']);
 function walkMoov(moov, info, startDepth = 0) {
@@ -357,12 +371,13 @@ function walkMoov(moov, info, startDepth = 0) {
       if (sz === 1) { sz = be32(b, p + 12); hdr = 16; }
       if (sz < 8 || p + sz > e) sz = e - p;
       const cs = p + hdr, ce = p + sz;
-      if (t === 'mvhd') {
+      if (t === 'stsd') stsd(b, cs, ce, info);
+      else if (t === 'mvhd') {
         const v = b[cs];
         const ts = v === 1 ? be32(b, cs + 20) : be32(b, cs + 12);
         const du = v === 1 ? be32(b, cs + 24) * 4294967296 + be32(b, cs + 28) : be32(b, cs + 16);
         if (ts) info.duration = du / ts;
-      } else if (t === 'udta' || t === 'ilst' || t === 'trak' || t === 'mdia') {
+      } else if (t === 'udta' || t === 'ilst' || t === 'trak' || t === 'mdia' || t === 'minf' || t === 'stbl') {
         walk(b, cs, ce, depth + 1);
       } else if (t === 'meta') {
         walk(b, cs + 4, ce, depth + 1);
@@ -392,7 +407,11 @@ async function parseWav(rd, info, size, head) {
     const h = await rd.read(o, 8);
     if (h.length < 8) break;
     const id = ascii(h, 0, 4), len = le32(h, 4);
-    if (id === 'fmt ') { const b = await rd.read(o + 8, Math.min(len, 64)); byteRate = le32(b, 8); }
+    if (id === 'fmt ') {
+      const b = await rd.read(o + 8, Math.min(len, 64)); byteRate = le32(b, 8);
+      let tag = le16(b, 0); if (tag === 0xfffe && len >= 26) tag = le16(b, 24);     // WAVE_FORMAT_EXTENSIBLE → 하위 형식
+      if (tag === 1 || tag === 3) info.fmt = { codec: tag === 3 ? 'WAV (실수)' : 'WAV', rate: le32(b, 4), bits: le16(b, 14), ch: le16(b, 2), lossless: true };
+    }
     else if (id === 'data') { if (byteRate) info.duration = len / byteRate; }
     else if (id === 'LIST' && len < 1e6) {
       const b = await rd.read(o + 8, len);
@@ -439,6 +458,17 @@ export function cleanGenre(v) {
   return '';
 }
 
+/* ---------- 이 파서가 모르는 형식: 코덱 엔진(FFmpeg)으로 ---------- */
+let fallback = null;
+export function setTagFallback(fn) { fallback = fn; }
+const isCodecFormat = b => {
+  const s4 = ascii(b, 0, 4);
+  return s4 === 'MAC ' || s4 === 'wvpk' || s4 === 'TTA1' || s4 === 'DSD ' || s4 === 'FRM8' || s4 === 'MPCK' || ascii(b, 0, 3) === 'MP+' || s4 === 'tBaK' ||
+    s4 === 'caff' || s4 === 'ajkg' || s4 === 'riff' || (s4 === 'FORM' && /^AIF[FC]$/.test(ascii(b, 8, 4))) ||
+    (b[0] === 0x30 && b[1] === 0x26 && b[2] === 0xb2 && b[3] === 0x75) ||            // ASF (WMA)
+    (b[0] === 0x0b && b[1] === 0x77) || (b[0] === 0x7f && b[1] === 0xfe && b[2] === 0x80 && b[3] === 0x01);   // AC3 · DTS
+};
+
 /* ---------- entry ---------- */
 export async function readTags(src, { picture = true } = {}) {
   const info = { title: '', artist: '', album: '', albumArtist: '', genre: '', track: 0, duration: 0, picture: null, lyrics: '' };
@@ -462,6 +492,7 @@ export async function readTags(src, { picture = true } = {}) {
     else if (sig === 'OggS') await parseOgg(rd, info, size, off);
     else if (ascii(b, 4, 4) === 'ftyp') await parseMp4(rd, info, size, picture);
     else if (sig === 'RIFF' && ascii(b, 8, 4) === 'WAVE') await parseWav(rd, info, size, b);
+    else if (isCodecFormat(b)) { /* 아래 코덱 엔진에서 */ }
     else {
       let hasV1 = false;
       if (size > 256) {
@@ -474,9 +505,22 @@ export async function readTags(src, { picture = true } = {}) {
           if (!info.genre && t[127] < ID3_GENRES.length) info.genre = cleanGenre(String(t[127]));
         }
       }
+      for (let i = 0; i < Math.min(b.length - 4, 8192); i++) {
+        if (b[i] === 0xff && (b[i + 1] & 0xe0) === 0xe0) { const h = mpegHeader(b, i); if (h) { info.fmt = { codec: h.L === 3 ? 'MP3' : 'MP' + h.L, rate: h.sr, ch: h.mono ? 1 : 2, kbps: h.bitrate / 1000 }; break; } }
+      }
       let d = mp3Duration(b, 0, size - off, hasV1);
       if (!d && b.length < 65536 && size - off > b.length) d = mp3Duration(await rd.read(off, 65536), 0, size - off, hasV1);   // 첫 프레임이 멀리 있는 파일
       info.duration = d || info.tlen || 0;
+    }
+    if (fallback && isCodecFormat(b) && (!info.title || !info.duration || (picture && !info.picture))) {
+      const x = await fallback(src, { picture }).catch(() => null);
+      if (x) {
+        for (const k of ['title', 'artist', 'album', 'albumArtist', 'genre', 'lyrics']) if (!info[k] && x[k]) info[k] = clean(x[k]);
+        if (!info.track && x.track) info.track = parseInt(x.track, 10) || 0;
+        if (!info.duration && x.duration) info.duration = x.duration;
+        if (!info.picture && x.picture) info.picture = x.picture;
+        if (x.fmt) info.fmt = x.fmt;
+      }
     }
   } catch (e) { /* partial info is fine */ }
   if (!info.artist && info.albumArtist) info.artist = info.albumArtist;

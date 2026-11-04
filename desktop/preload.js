@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('ullimNative', {
   openPlaylists: () => ipcRenderer.invoke('open-playlists'),
   findLrc: p => ipcRenderer.invoke('find-lrc', p),
   openExternal: url => ipcRenderer.send('open-external', url),
+  openSoundSettings: () => ipcRenderer.send('open-sound-settings'),
   updateSupported: (() => { try { return !!ipcRenderer.sendSync('update-supported'); } catch (e) { return false; } })(),
   updateDownload: (url, sha256, size, version) => ipcRenderer.invoke('update-download', url, sha256, size, version),
   updateDiscard: () => ipcRenderer.invoke('update-discard'),

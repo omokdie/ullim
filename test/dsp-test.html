@@ -28,8 +28,9 @@ async function render(build, params, sigFn, secs = 3, extraSecs = 0) {
   await ctx.audioWorklet.addModule('../web/js/fx-worklet.js');
   const src = ctx.createBufferSource();
   src.buffer = makeSignal(ctx, secs, sigFn);
-  const m = build(ctx);
+  const m = build(ctx, {});
   for (const [k, v] of Object.entries(params)) m.set(k, v);
+  if (m.ready) await m.ready;
   src.connect(m.input); m.output.connect(ctx.destination);
   src.start();
   const out = await ctx.startRendering();

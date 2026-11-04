@@ -7,5 +7,5 @@ PLUG=${PLUG:-/home/claude/dl/x/nsisres/plugins/x86-unicode}
 cd "$ROOT/build/installer"
 NSISDIR="$NSIS" "$NSIS/linux/makensis" -V2 -INPUTCHARSET UTF8 \
   -DPLUGINS="$PLUG" -DICON="$ROOT/assets/ullim.ico" -DSRC="$ROOT/build/win/Ullim" \
-  -DOUTFILE="$ROOT/dist/Ullim-Setup-1.2.3.exe" ullim.nsi
-ls -la "$ROOT/dist/Ullim-Setup-1.2.3.exe"
+  -DOUTFILE="$ROOT/dist/Ullim-Setup-1.3.0.exe" ullim.nsi
+ls -la "$ROOT/dist/Ullim-Setup-1.3.0.exe"

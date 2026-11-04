@@ -1,6 +1,6 @@
 # 울림 — 작업 인계 문서 (Handoff)
 
-> 갱신: 2026-11-04 KST (1.2.3 게시). 다음 세션은 이 문서 → `README.md` → `RELEASING.md` → `lyrics/README.md` 순서로 읽으면 됩니다.
+> 갱신: 2026-11-04 KST (1.3.0 준비 — 새 음장 엔진 · 휠 · 재생 속도 · DAC · 코덱). 다음 세션은 이 문서 → `README.md` → `RELEASING.md` → `lyrics/README.md` 순서로 읽으면 됩니다.
 > 소스: **GitHub `omokdie/ullim` (공개, main)**. 클라우드 세션 작업 폴더 `/home/claude/ullim` (origin = 위 저장소).
 
 ## 1. 사용자 요구사항 (반영 상태)
@@ -31,6 +31,11 @@
 | 22 | 1.2.3: 알림 재생 컨트롤에 무작위 · 반복 버튼, 위치 · 크기 깔끔하게 | ✅ 무작위 · 이전 · 재생 · 다음 · 반복, 앱 모양 벡터 아이콘 |
 | 23 | 1.2.3: 홈의 재생 중 플레이리스트 테두리가 위 막대를 뚫고 보임 | ✅ `.scroller` · `.mosaic` 에 `isolation: isolate` |
 | 24 | 1.2.3: 용량을 전체적으로 줄이기 | ✅ 아래 1.2.3 '용량' — 설치 파일 105→96MB, 설치 후 디스크 약 310→150MB(윈도우 압축, 추정), APK 655→389KB, 앨범아트 저장 중복 제거 |
+| 25 | 1.3.0: 음장 효과가 끊기고 지지직 — 인터넷의 좋은 엔진(이미 배포된 것)을 모아 최상의 음질로, 모바일 · PC 따로라도 | ✅ 아래 1.3.0 절 — 네이티브 Web Audio 노드로 다시 만듦, Signalsmith Stretch(키), 끊김 0 측정 |
+| 26 | 1.3.0: 설정에서 볼륨만 바꿔도 끊김 | ✅ 모든 값 바꾸기를 setTargetAtTime 으로 (linearRamp 가 0초부터 계산돼 튀던 것) |
+| 27 | 1.3.0: 재생 화면에서 속도 조절 · 음장 화면으로 바로 가는 작은 버튼 | ✅ 재생 화면 **1.0×** · **음장** 칩 |
+| 28 | 1.3.0: 스위치 말고 휠로 다루는 게 나은 기능은 휠로 | ✅ `web/js/knob.js` — 효과 카드의 연속 값 + 음장 화면 위 **빠른 조절** 6개 |
+| 29 | 1.3.0: DAC · 코덱 추가 — "휴대폰에서 가장 높은 품질을 내보낼 수 있는 형식으로" | ✅ 고음질 출력(USB DAC 최고 형식 · 신호 경로 · 원음 비트 그대로) + 코덱 엔진(FFmpeg wasm: DSD · APE · WavPack · ALAC …) |
 
 ## 2. 구조 요약
 
@@ -66,6 +71,29 @@ v1.0.2 ~ v1.2.3 도 같은 방법(임시 브랜치는 매번 부모 없는 커�
 - 첫 Publish 가 회색으로 멈추고 아무것도 안 되면: **Save draft** → 릴리스 목록의 초안 편집 페이지를 새로 열기 → Publish.
 - 확인: `gh api repos/omokdie/ullim/releases/tags/v<버전>` 의 assets[].digest(sha256) 가 빌드와 같은지. 그다음 RELEASING 4단계(update/latest.json).
 APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관용으로 전달함 — 다음 버전 APK 빌드 때 `android/keystore/` 에 다시 넣어야 함.
+
+### 1.3.0 — 새 음장 엔진 · 휠 · 재생 속도 · 고음질 출력(DAC) · 코덱 엔진
+**엔진** (`web/js/engine.js` · `effects.js`): 효과마다 '칸'(in → dry/wet → sum)을 처음 켤 때 ORDER 자리에 끼워 넣고 앱을 닫을 때까지 빼지 않음.
+켜고 끄기는 dry · wet 을 0.12초 겹쳐 바꿈(지연이 큰 키 조절만 잠깐 줄였다 올림). **모든 값 바꾸기는 `setTargetAtTime`** — `linearRampToValueAtTime`
+은 앞선 자동화 이벤트가 없으면 0초부터 계산돼 바로 툭 바뀌는 것이 1.2.x 의 '지지직 · 볼륨만 바꿔도 끊김'의 큰 원인이었음.
+효과는 거의 모두 네이티브 노드(C++): 리버브 · 공간은 합성 임펄스 응답 컨볼루션(휴대폰은 모노 IR · 1.8초, PC 5초), 3D/가상 스피커는 PannerNode HRTF,
+크로스피드는 bs2b 를 IIRFilter 로, 파형 변형은 2~4배 오버샘플링. JS 워클릿은 초저음 · 볼륨 평준화 둘만(그 효과를 켤 때 불러옴).
+키 조절은 Signalsmith Stretch 1.3.2 (MIT, `web/js/vendor`, `[ullim]` 표시 두 곳 고침 — moduleUrl · shutdown), CSP 에 `'wasm-unsafe-eval'`.
+**음량 단계**: `head`(자동 여유 음량 = 켜진 EQ · 음색 효과가 올리는 최고치의 55%, 1.5kHz 위는 덜) → 효과들 → 리미터(기준 = 최대 레벨 − 1dB, 압축기의
+메이크업 이득 `(1/full-range-gain)^0.6` 을 되돌려 기준 아래는 정확히 1배) → 안전망(0.9 부터 소프트 클립, 2배 오버샘플링).
+**리미터만 켜져 있으면 효과 경로를 쓰지 않음**(`liveIds`) → 원음 비트 그대로. 시험: `test/preset_level_test.py`(프리셋별 음량 차 · 봉우리 · 안전망이 누른 %),
+`test/fx_glitch_test.py`(25개 효과 켜고 끄며 녹음 → 끊김 · 튐 · 언더런 0), `test/run_dsp.py`.
+**화면**: `web/js/knob.js`(SVG 휠, 마우스 위아래 · 휠 · Shift 미세 · 터치는 좌우 · 두 번 눌러 기본값 · 키보드), 음장 화면 **빠른 조절**(MACROS — 돌리면 효과가
+켜지고 끝까지 내리면 꺼짐), 재생 화면 `#pSpeed`(속도 창: 칩 · 큰 휠 · 음정 유지) · `#pFx`(음장 화면으로) · `#pFmt`(PC: 'FLAC 24/96' 형식 표시).
+**고음질 출력 (DAC)**: 설정 → 고음질 출력 — 신호 경로(파일 → 앱 처리 → 출력). 안드로이드 `AudioOut.java`: 출력 장치 · USB DAC 형식을 JSON 으로
+(`UllimAndroid.audioOut()`), 안드로이드 14+ 에서 `setPreferredMixerAttributes`(USAGE_MEDIA, 리플렉션 — 빌드의 android.jar 가 33)로 가장 높은 비트 ·
+앱 출력의 정수배 샘플레이트(≤192kHz). 장치가 바뀌면 `window.__ullimAudioOut`. 앱을 닫으면 되돌림. **실기기 시험 못 함**(USB DAC · 안드로이드 14 필요).
+PC: `AudioContext.setSinkId` 로 출력 장치, 고른 장치로 다음 실행 때 AudioContext 를 만들어 그 장치 샘플레이트로 엶. Windows 소리 설정 열기 IPC.
+**코덱 엔진** (`codec/`, `web/js/codec.js` · `codec-worker.js` · `vendor/ullim-codec.wasm`): FFmpeg n7.1.1 최소 빌드(wasm32-wasi) → FLAC fMP4 →
+MediaSource. 확장자로 고르고(`needsCodec`), 브라우저 엔진이 못 풀면(error code 3 · 4) 한 번 더 이 엔진으로. 워커는 Blob 으로 띄우고 파일은 메인 스레드가
+Range 로 읽어 줌(안드로이드 WebView 가 워커 요청을 가로채지 못할 수 있어서). JSPI 가 없으면 통째로(휴대폰 400MB · PC 1.2GB 상한).
+태그는 `tags.js` 의 `setTagFallback`(APE · WV · DSF · AIFF · ASF … 서명일 때). 시험 `test/codec_test.py`(+`--no-jspi`), `test/electron_codec_test.js`.
+안드로이드 WebView 의 MSE FLAC · Range 동작은 tags.js 와 같은 길이라 될 것으로 보지만 **실기기 시험 못 함**.
 
 ### 1.1.0 — 플레이리스트 여러 개
 - `app.js`: `pls`(전체) · `shown`(왼쪽에 보이는 목록) · `playPl`(재생 중인 목록). **`list` 는 항상 `playPl.tracks` 와 같은 배열** — 재생 쪽 코드(playIndex ·
@@ -277,6 +305,8 @@ APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관�
   앱 등록(Lrclib-App-Id, 공개 값이라 앱에 넣어도 됨) → 요청 헤더에 추가하면 됨.
 
 ## 4. 남은 일 · 아이디어
+0. (1.3.0) 실제 안드로이드(14+, USB DAC)에서 고음질 출력 · 코덱 엔진 확인. 비트 퍼펙트는 WebView 출력 형식(48kHz 실수)이 DAC 형식과 달라 쓰지 않음 —
+   원하면 원음 재생만 네이티브(AudioTrack)로 따로 보내는 큰 작업이 필요.
 1. 같은 곡이 태그 표기만 다른 경우(아이유 / IU) 공용 목록 열쇠가 달라 따로 집계됨 → 별칭 표 또는 LRCLIB 번호 기준 묶기.
 2. 공용 목록이 커지면(수만 곡) 첫 글자별로 나눠 받기.
 3. Windows 코드 서명 인증서(없으면 SmartScreen 경고). 자동 업데이트는 1.1.0 에서 완료(앱이 직접 받은 파일에는 '인터넷에서 받음' 표시가 붙지 않아 보통 경고 없이 설치됨 — 실제 Windows 에서 첫 업데이트 때 확인).

@@ -11,13 +11,14 @@ const { spawn } = require('child_process');
 
 const WEB = path.join(__dirname, 'web');
 const ASSETS = path.join(__dirname, 'assets');
-const AUDIO_EXT = new Set(['mp3', 'm4a', 'm4b', 'mp4', 'aac', 'flac', 'ogg', 'oga', 'opus', 'wav', 'wave', 'webm', 'weba', 'mka']);
+const AUDIO_EXT = new Set(['mp3', 'm4a', 'm4b', 'mp4', 'aac', 'flac', 'ogg', 'oga', 'opus', 'wav', 'wave', 'webm', 'weba', 'mka',
+  'ape', 'wv', 'tta', 'dsf', 'dff', 'wma', 'aif', 'aiff', 'aifc', 'ac3', 'eac3', 'dts', 'mp2', 'mpc', 'tak', 'shn', 'caf', 'w64']);   // 뒤쪽은 코덱 엔진(FFmpeg wasm)으로
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.json': 'application/json',
   '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.m4b': 'audio/mp4', '.mp4': 'audio/mp4', '.aac': 'audio/aac', '.flac': 'audio/flac',
   '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg', '.wav': 'audio/wav', '.wave': 'audio/wav',
-  '.webm': 'audio/webm', '.weba': 'audio/webm', '.mka': 'audio/x-matroska',
+  '.webm': 'audio/webm', '.weba': 'audio/webm', '.mka': 'audio/x-matroska', '.wasm': 'application/wasm',
 };
 const isAudio = p => AUDIO_EXT.has(path.extname(p).slice(1).toLowerCase());
 
@@ -355,6 +356,10 @@ ipcMain.handle('http-post', async (_e, url, body) => {
 /* GitHub · LRCLIB 페이지만 기본 브라우저로 연다 */
 ipcMain.on('open-external', (_e, url) => {
   if (typeof url === 'string' && /^https:\/\/(github\.com|lrclib\.net)\//.test(url)) shell.openExternal(url);
+});
+/* 고음질 출력: Windows 소리 설정 (장치 형식 — 24비트 · 192kHz 등) */
+ipcMain.on('open-sound-settings', () => {
+  if (process.platform === 'win32') shell.openExternal('ms-settings:sound').catch(() => {});
 });
 ipcMain.handle('find-lrc', async (_e, p) => {
   if (typeof p !== 'string' || !isAudio(p)) return null;

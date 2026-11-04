@@ -4,7 +4,9 @@
  *   android  : window.UllimAndroid (JavascriptInterface)
  *   web      : 브라우저 (개발 · 미리보기용)
  */
-export const AUDIO_EXT = ['mp3', 'm4a', 'm4b', 'mp4', 'aac', 'flac', 'ogg', 'oga', 'opus', 'wav', 'wave', 'webm', 'weba', 'mka'];
+export const AUDIO_EXT = ['mp3', 'm4a', 'm4b', 'mp4', 'aac', 'flac', 'ogg', 'oga', 'opus', 'wav', 'wave', 'webm', 'weba', 'mka',
+  // 코덱 엔진(FFmpeg wasm)으로 푸는 형식
+  'ape', 'wv', 'tta', 'dsf', 'dff', 'wma', 'aif', 'aiff', 'aifc', 'ac3', 'eac3', 'dts', 'mp2', 'mpc', 'tak', 'shn', 'caf', 'w64'];
 export const isAudioName = n => AUDIO_EXT.includes((n.split('.').pop() || '').toLowerCase());
 const baseName = p => p.split(/[\\/]/).pop();
 
@@ -32,6 +34,7 @@ function webPlatform() {
     pickFiles: () => pick({}),
     pickFolder: () => pick({ dir: true }),
     fromDrop: async dt => fromFiles([...(dt.files || [])]),
+    audioOut: { pickSink: true },
   };
 }
 
@@ -59,6 +62,8 @@ function electronPlatform() {
     openPlaylists: () => N.openPlaylists(),
     findLrc: key => N.findLrc(key),
     openExternal: url => N.openExternal(url),
+    // 고음질 출력: 출력 장치 고르기는 Web Audio(setSinkId), Windows 소리 설정 열기만 메인 프로세스로
+    audioOut: { pickSink: true, openSoundSettings: () => { try { N.openSoundSettings && N.openSoundSettings(); } catch (e) { /* noop */ } } },
     setTheme: (bg, light) => { try { N.setTheme && N.setTheme(bg, light); } catch (e) { /* noop */ } },
     // 한가할 때 캐시 비우기 (메인 프로세스가 '메모리 부족' 알림을 보내 줌 — desktop/main.js scheduleTrim)
     trimMemory: () => { try { N.trimMemory && N.trimMemory(); } catch (e) { /* noop */ } },
@@ -82,8 +87,9 @@ function androidPlatform() {
   };
   W.__ullimCommand = (c, a) => emitCmd(c, a);
   W.__ullimOpen = json => { try { emitOpen(JSON.parse(json)); } catch (e) { /* noop */ } };
-  const netFns = [];
+  const netFns = [], outFns = [];
   W.__ullimNet = t => { for (const f of netFns) { try { f(t); } catch (e) { /* noop */ } } };
+  W.__ullimAudioOut = json => { let o; try { o = JSON.parse(json); } catch (e) { return; } for (const f of outFns) { try { f(o); } catch (e) { /* noop */ } } };
   const call = (method, ...args) => new Promise((resolve, reject) => {
     const id = 'r' + (++seq);
     pending.set(id, { resolve, reject });
@@ -110,6 +116,12 @@ function androidPlatform() {
     // 연결 종류: 'wifi' · 'cellular' · 'other' · 'none' · 'unknown' — 바뀌면 onNetwork 로 알림
     network: () => { try { return String(A.net() || 'unknown'); } catch (e) { return 'unknown'; } },
     onNetwork: f => netFns.push(f),
+    // 고음질 출력 (DAC): 지금 출력 장치 · USB DAC 형식(안드로이드 14+) — 바뀌면 onChange
+    audioOut: {
+      info: () => { try { return JSON.parse(A.audioOut() || '{}'); } catch (e) { return {}; } },
+      setMode: m => { try { A.setHiRes(String(m)); } catch (e) { /* noop */ } },
+      onChange: f => outFns.push(f),
+    },
     // 새 버전 알림만 (받기 · 설치는 브라우저 → 안드로이드 설치 화면)
     update: {
       versionCode: () => { try { return Number(A.versionCode()) || 0; } catch (e) { return 0; } },

@@ -97,19 +97,60 @@
 - GitHub 계정이 있다면 [이슈 양식](https://github.com/omokdie/ullim/issues/new?template=lyrics.yml)으로도 제보할 수 있습니다.
 - 관리 방법은 [`lyrics/README.md`](lyrics/README.md) 참고.
 
+## 1.3.0 — 새 음장 엔진 · 휠 · 재생 속도 · DAC · 코덱
+
+- **끊김 · 지지직 없는 음장 엔진**: 효과를 브라우저 엔진(Chromium) 안의 네이티브 오디오 처리(C++ — 컨볼루션 잔향 · HRTF · 다이내믹스 ·
+  바이쿼드 필터 · 2~4배 오버샘플링 파형 변형)로 다시 만들었어요. 예전에는 효과 대부분을 자바스크립트(AudioWorklet)로 계산해 휴대폰에서
+  소리가 끊기고, 효과를 켜고 끄거나 볼륨을 바꿀 때 값이 갑자기 튀었어요. 이제는
+  - 켜고 끄기 · 값 바꾸기는 모두 지수 곡선으로 부드럽게(0.12초 겹쳐 바꾸기, 효과 칸은 처음 켤 때 한 번만 끼워 넣음),
+  - EQ · 음색 효과가 올린 만큼 **자동으로 미리 줄이고**(자동 프리앰프), 리미터는 기준 아래 소리를 **전혀 건드리지 않게**(웹 오디오 압축기가
+    몰래 더하던 메이크업 이득을 되돌림), 마지막 안전망은 2배 오버샘플링 소프트 클리퍼,
+  - 효과를 모두 끄면(리미터만 켜져 있어도) 효과 경로를 아예 쓰지 않아 **원음을 한 비트도 바꾸지 않아요**.
+  측정(`test/fx_glitch_test.py`, 효과 25개를 켜고 끄며 녹음): 1.2.3 끊김 25번 · 640ms · 튐 2번 → 1.3.0 **0 · 0 · 0**.
+  프리셋마다 요즘 가요처럼 꽉 찬 음원(-9 LUFS)에서도 안전망이 거의 일하지 않음(`test/preset_level_test.py`).
+- **키 조절**: [Signalsmith Stretch](https://signalsmith-audio.co.uk/code/stretch/)(MIT, WebAssembly) — 음정만 바꿔도 소리가 맑아요.
+- **휠(노브)**: 세기 · 양 · 시간처럼 연속으로 돌리는 값은 휠로. 음장 화면 위 **빠른 조절**(저음 · 고음 · 울림 · 입체감 · 선명도 · 보컬)은 휠을
+  돌리면 해당 효과가 저절로 켜지고 끝까지 내리면 꺼져요. PC 는 위아래로 끌기 · 마우스 휠(Shift = 미세), 휴대폰은 좌우로 밀기,
+  두 번 누르면 기본값.
+- **재생 화면에 속도 · 음장 버튼**: **1.0×** 를 누르면 속도 창(0.5~2.0× 칩 · 휠 · 음정 유지), **음장** 을 누르면 바로 음장 효과 화면으로.
+
+### 고음질 출력 (DAC) — 설정 → 고음질 출력
+
+- **신호 경로**를 보여 줘요: 파일(예: `FLAC · 24bit · 96kHz · 무손실`, `DSD64`) → 앱 처리(32bit 실수 · 샘플레이트 · 원음 그대로/효과 N개) → 출력 장치.
+  PC 재생 화면에는 `FLAC 24/96` 같은 형식 표시(고해상도면 강조색).
+- **휴대폰 (안드로이드 14 이상)**: USB DAC 를 꽂으면 그 DAC 가 받는 **가장 높은 비트(32 → 24 → 16)와 샘플레이트(앱 출력의 정수배, 최대 192kHz)**로
+  출력 형식을 정해요(`AudioMixerAttributes`, 권한 필요 없음). 목록에서 직접 고르거나 '안드로이드 기본'으로 되돌릴 수도 있어요. 블루투스는
+  휴대폰이 코덱을 정하므로 LDAC 990kbps 를 고르는 방법을 알려 줘요.
+- **PC**: 출력 장치(USB DAC · 오디오 인터페이스)를 고를 수 있고, 그 장치의 샘플레이트로 앱을 열어(다음 실행부터) 앱 안에서 한 번 더 바꾸지 않아요.
+  Windows 공유 모드 32bit 실수로 내보내며, 장치 형식(24비트 · 192kHz 등)은 **소리 설정 열기**에서.
+- 한계: 휴대폰 앱은 소리를 휴대폰 기본 속도(보통 48kHz)로 만들어 내보내요(WebView 구조). 고해상도 파일도 32bit 실수로 고품질 변환해 들리는 손실은 없어요.
+
+### 코덱 엔진 — 더 많은 형식 (FFmpeg)
+
+- 브라우저 엔진이 못 푸는 **DSD(DSF · DFF) · APE · WavPack · ALAC · AIFF · TTA · TAK · Musepack · WMA(무손실 포함) · AC-3 · E-AC-3 · DTS · TrueHD · MP2 ·
+  CAF · Wave64 · Shorten** 을 [FFmpeg](https://ffmpeg.org) 7.1.1(LGPL 2.1+, 고치지 않음)을 WebAssembly 로 빌드한 엔진(`web/js/vendor/ullim-codec.wasm`,
+  약 1.4MB)으로 풀어요. 확장자가 익숙해도(예: ALAC 가 든 .m4a) 브라우저 엔진이 못 풀면 자동으로 이 엔진으로 다시 시도해요.
+- 푼 소리는 **무손실 FLAC**(원본이 16비트면 16비트, 그 밖은 24비트)으로 묶어 MediaSource 로 `<audio>` 에 넣어요 — 그래서 탐색 · 속도(음정 유지) ·
+  음장 효과 · 크로스페이드 · 가사가 다른 형식과 똑같이 돼요. 5.1 채널은 스테레오로 섞고, DSD 는 88.2kHz(DSD64) · 176.4kHz(DSD128 이상, 휴대폰은 88.2kHz)
+  24bit PCM 으로 바꿔요. 파일은 필요한 조각만 읽고(앞으로 20~30초만 미리 풀어 둠) 들은 부분은 버려 메모리를 적게 써요.
+- 태그 · 앨범아트(APEv2 · ASF · DSF/AIFF 의 ID3)도 이 엔진으로 읽어요.
+- 빌드 방법: [`codec/README.md`](codec/README.md). FFmpeg 소스는 릴리스 페이지에도 올려 둬요.
+
 ## 음장 효과 (40종 + 10밴드 EQ)
 
 - **공간 · 입체**: 스테레오 와이드, 3D 서라운드, 가상 스피커(HRTF), 8D 회전, 하스 입체감, 헤드폰 크로스피드(bs2b)
-- **잔향 · 에코**: 리버브(Freeverb), 공간 시뮬레이션(콘서트홀·대성당 등 7종, 컨볼루션), 에코·딜레이(핑퐁)
+- **잔향 · 에코**: 리버브(공간 크기 · 흡음 · 넓이 — 합성 임펄스 응답 컨볼루션), 공간 시뮬레이션(콘서트홀·대성당 등 7종, 컨볼루션), 에코·딜레이(핑퐁)
 - **음색 · 저음**: 베이스 부스트, 가상 저음, 초저음 생성, 트레블, 라우드니스, 크리스탈라이저, 익사이터, 진공관 웜
 - **음량 · 다이내믹**: 컴프레서, 야간 모드, 볼륨 평준화, 리미터
 - **보컬**: 보컬 제거(노래방), 보컬 강조
 - **변조**: 코러스, 플랜저, 페이저, 트레몰로, 비브라토, 오토 팬, 로터리 스피커
-- **속도 · 키**: 재생 속도(음정 유지), 키 조절(±12 반음)
+- **속도 · 키**: 재생 속도(음정 유지), 키 조절(±12 반음, Signalsmith Stretch)
 - **특수 효과**: 라디오·전화, 수중, 로파이·비트크러셔, LP 레코드, 오버드라이브
 - **채널**: 좌우 밸런스, 모노, 좌우 바꾸기
 
-사용한 공개 기법: Freeverb(Jezar, 퍼블릭 도메인), bs2b 크로스피드 공식(MIT), RBJ Audio EQ Cookbook 필터, 브라우저 엔진 내장 HRTF, 상관관계 정렬 피치 시프트, 가상 저음(비선형 배음), 옥타브 분주 초저음, 샘플 차분 크리스탈라이저. 코드는 모두 새로 작성했습니다.
+사용한 공개 기법 · 엔진: 브라우저 엔진 내장 네이티브 처리(ConvolverNode · PannerNode HRTF · DynamicsCompressor · BiquadFilter · IIRFilter · WaveShaper),
+bs2b 크로스피드 공식(MIT), RBJ Audio EQ Cookbook 필터, Signalsmith Stretch(MIT, 키 조절), MaxxBass 방식 가상 저음(비선형 배음), 옥타브 분주 초저음,
+샘플 차분 크리스탈라이저, 합성 임펄스 응답(초기 반사 + 주파수별 감쇠). 코덱은 FFmpeg(LGPL 2.1+). 그 밖의 코드는 모두 새로 작성했습니다.
 
 ## 구조
 
@@ -120,16 +161,21 @@ web/                화면 + 음장 엔진 (두 플랫폼 공통)
   js/glass.js       리퀴드 글라스 (굴절 지도 · 배터리 절약 때 끄기)
   js/thumbs.js      앨범아트 작은 그림 (IndexedDB 에 저장, 보이는 것만 쉬는 시간에)
   js/autosync.js    자동 싱크 (시간 없는 가사를 노래에 맞추기)
-  js/engine.js      Web Audio 그래프 (덱 2개 → 효과 체인 → 볼륨)
-  js/effects.js     음장 효과 40종 정의
-  js/fx-worklet.js  AudioWorklet DSP (직접 구현)
+  js/engine.js      Web Audio 그래프 (덱 2개 → 원음/효과 경로 → 볼륨 · 출력 장치)
+  js/effects.js     음장 효과 40종 정의 (네이티브 노드) · 빠른 조절 휠
+  js/knob.js        휠(노브) 조절기
+  js/fx-worklet.js  AudioWorklet DSP (초저음 · 볼륨 평준화만)
+  js/codec.js       코덱 엔진 (FFmpeg wasm → FLAC fMP4 → MediaSource)
+  js/codec-worker.js  코덱 엔진 워커 · js/vendor/ullim-codec.wasm (codec/ 에서 빌드)
+  js/vendor/signalsmith-stretch.mjs  키 조절 (MIT)
   js/presets.js     EQ 프리셋 18종 · 음장 프리셋 18종
   js/tags.js        태그 · 길이 · 앨범아트 · 파일 속 가사 (ID3v1/v2, FLAC, Ogg/Opus, MP4, WAV, EUC-KR)
   js/lyrics.js      가사 찾기(LRCLIB) · LRC 해석 · 공용 가사 목록 · 의견 보내기
   js/platform.js    Electron / Android / 브라우저 연결층
   js/update.js      자동 업데이트 (update/latest.json 읽기 · 버전 비교)
 desktop/            윈도우용 Electron 셸 (main.js, preload.js)
-android/            안드로이드 WebView 셸 (Java, AndroidX 없음)
+android/            안드로이드 WebView 셸 (Java, AndroidX 없음 · AudioOut.java = 고음질 출력)
+codec/              코덱 엔진 소스 (FFmpeg 래퍼 ullim_codec.c · build_codec.sh)
 lyrics/             공용 가사 목록 overrides.json (봇이 갱신)
 update/             자동 업데이트 정보 latest.json (릴리스 뒤 build/make_update_manifest.py 로 갱신)
 .github/            가사 의견 봇(workflows/lyrics-feedback.yml, scripts/lyrics_feedback.py), 이슈 양식

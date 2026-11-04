@@ -48,7 +48,8 @@ public class MainActivity extends Activity {
     static final String HOST = "appassets.androidplatform.net";
     static final String ORIGIN = "https://" + HOST;
     static final int REQ_FILES = 11, REQ_TREE = 12, REQ_PERM_AUDIO = 21;
-    static final String[] AUDIO_EXT = {"mp3", "m4a", "m4b", "mp4", "aac", "flac", "ogg", "oga", "opus", "wav", "wave", "webm", "weba", "mka"};
+    static final String[] AUDIO_EXT = {"mp3", "m4a", "m4b", "mp4", "aac", "flac", "ogg", "oga", "opus", "wav", "wave", "webm", "weba", "mka",
+        "ape", "wv", "tta", "dsf", "dff", "wma", "aif", "aiff", "aifc", "ac3", "eac3", "dts", "mp2", "mpc", "tak", "shn", "caf", "w64"};   // 뒤쪽은 코덱 엔진(FFmpeg wasm)으로
 
     static MainActivity instance;
     final Handler main = new Handler(Looper.getMainLooper());
@@ -56,6 +57,7 @@ public class MainActivity extends Activity {
     WebView web;
     String reqFiles, reqTree, reqScan, pendingOpen;
     boolean pageReady;
+    AudioOut audioOut;              // 고음질 출력 (DAC)
 
     @Override
     protected void onCreate(Bundle state) {
@@ -84,6 +86,7 @@ public class MainActivity extends Activity {
         setContentView(web);
         web.loadUrl(ORIGIN + "/index.html");
         watchNetwork();
+        try { audioOut = new AudioOut(this); } catch (Exception e) { audioOut = null; }
         if (state == null) {
             handleIntent(getIntent());
             new Thread(this::removeOldUpdateFiles).start();
@@ -116,6 +119,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (netCb != null) { try { getSystemService(ConnectivityManager.class).unregisterNetworkCallback(netCb); } catch (Exception e) { /* noop */ } netCb = null; }
+        if (audioOut != null) { audioOut.release(); audioOut = null; }   // USB DAC 형식을 안드로이드 기본으로 되돌림
         if (isFinishing()) PlaybackService.stop(this);
         if (instance == this) instance = null;
         if (web != null) { web.destroy(); web = null; }
@@ -224,6 +228,12 @@ public class MainActivity extends Activity {
                 return pm != null && pm.isPowerSaveMode();
             } catch (Exception e) { return false; }
         }
+        /** 고음질 출력 (DAC): 지금 출력 장치 · USB DAC 형식 (JSON) */
+        @JavascriptInterface
+        public String audioOut() { AudioOut o = a.audioOut; return o != null ? o.info() : "{}"; }
+        /** USB DAC 형식: "auto"(최고 품질) · "off"(안드로이드 기본) · "<샘플레이트>/<인코딩>" */
+        @JavascriptInterface
+        public void setHiRes(final String mode) { a.main.post(() -> { if (a.audioOut != null) a.audioOut.setMode(mode); }); }
         @JavascriptInterface
         public void exitApp() {
             a.main.post(() -> { PlaybackService.stop(a); a.finishAndRemoveTask(); });

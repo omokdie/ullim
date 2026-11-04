@@ -1,8 +1,10 @@
 /* 울림 — 화면과 재생 로직 */
 import { Engine } from './engine.js';
-import { FX, FX_BY_ID, CATEGORIES, EQ_FREQS, defaultParams } from './effects.js';
+import { FX, FX_BY_ID, CATEGORIES, EQ_FREQS, MACROS, defaultParams } from './effects.js';
+import { knob } from './knob.js';
 import { EQ_PRESETS, SOUND_PRESETS } from './presets.js';
-import { readTags } from './tags.js';
+import { readTags, setTagFallback } from './tags.js';
+import { needsCodec, CodecSource, supported as codecSupported, probe as codecProbe } from './codec.js';
 import { platform } from './platform.js';
 import { ICONS, icon } from './icons.js';
 import { fetchLatest, isNewer } from './update.js';
@@ -11,7 +13,7 @@ import { thumb, peek, setSource as setThumbSource, setTagSink, forgetPending, fa
 import { autoSync, saveAnchors, applyAnchors } from './autosync.js';
 import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO, LookupError, cacheShrink } from './lyrics.js';
 
-const VERSION = '1.2.3';
+const VERSION = '1.3.0';
 const $ = id => document.getElementById(id);
 const app = $('app');
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -188,7 +190,8 @@ const KIND_LABEL = { recent: '최근에 들은 곡', genre: '장르', all: '모�
 const subLine = t => [t.artist, t.album].filter(Boolean).join(' · ') || '알 수 없는 아티스트';
 
 /* ======================= 엔진 ======================= */
-const engine = new Engine();
+const engine = new Engine({ light: platform.name === 'android',   // 휴대폰: 잔향 길이 · 키 조절 계산량을 줄임
+  sinkId: platform.audioOut && platform.audioOut.pickSink && S.sink && S.sink.id || '' });   // PC: 고른 출력 장치(USB DAC)의 샘플레이트로 열기
 engine.setVolume(S.volume, S.muted);
 engine.addEventListener('fxerror', e => toast(`'${(FX_BY_ID[e.detail] || {}).name || e.detail}' 효과를 이 기기에서 쓸 수 없어요`));
 /* 메모리: 큰 일(곡 추가 · 그림 · 자동 맞춤 · 효과 바꿈 · 곡 바뀜)을 마치고 한가할 때 정리.
@@ -207,7 +210,7 @@ function memHint() {
     if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 4000 }); else run();
   }, wait);
 }
-engine.addEventListener('chain', () => memHint());
+engine.addEventListener('chain', () => { memHint(); renderOutput(); });
 const P = { index: -1, xf: null, errors: 0, sleepAt: 0, sleepTimer: 0, sleepFading: false, artUrl: null, artBlob: null, dragging: false, pDragging: false, lastSave: 0, lastReal: null, noted: null, seekAt: 0 };
 const isPlaying = () => P.index >= 0 && !engine.deck.a.paused;
 
@@ -237,6 +240,27 @@ engine.decks.forEach(deck => {
 
 /* ======================= 재생 ======================= */
 function revokeBlob(deck) { if (deck.blob) { URL.revokeObjectURL(deck.blob); deck.blob = null; } }
+/** 덱에 곡 넣기: 브라우저 엔진이 못 푸는 형식(DSD · APE · WavPack · AIFF · WMA …)은 코덱 엔진(FFmpeg)으로 */
+function loadDeck(deck, t) {
+  deck.fmt = null; deck.codecTried = false;
+  const url = platform.mediaUrl(t.key);
+  if (needsCodec(t.name || t.key) && codecSupported()) startCodec(deck, t, url);
+  else engine.load(deck, url);
+}
+function startCodec(deck, t, url) {
+  deck.codecTried = true;
+  const cs = new CodecSource(url, {
+    maxRate: platform.name === 'android' ? 96000 : 0,        // 휴대폰: DSD128↑ 도 88.2kHz 로 (출력이 48kHz 라 더 높여도 똑같고 계산만 늘어남)
+    onerror: () => { if (deck.codec === cs) { deck.codecFailed = true; onMediaError(deck, true); } },
+    oninfo: info => {
+      deck.fmt = codecFmt(info);
+      if (!t.tagged || !t.title) applyTagsAll(t.key, { title: info.title || '', artist: info.artist || '', album: info.album || '', genre: info.genre || '', duration: info.dur || 0 });
+      if (deck === engine.deck) renderOutput();
+    },
+  });
+  engine.load(deck, cs.attach(deck.a));
+  deck.codec = cs;
+}
 
 async function playIndex(i, { autoplay = true, startAt = 0 } = {}) {
   if (i < 0 || i >= list.length) return;
@@ -244,8 +268,8 @@ async function playIndex(i, { autoplay = true, startAt = 0 } = {}) {
   const deck = engine.deck, t = list[i];
   engine.resetGain(deck, 1);
   revokeBlob(deck);
-  deck.track = t; deck.blobTried = false; deck.pendingSeek = startAt;
-  engine.load(deck, platform.mediaUrl(t.key));
+  deck.track = t; deck.blobTried = false; deck.codecFailed = false; deck.pendingSeek = startAt;
+  loadDeck(deck, t);
   P.index = i;
   S.lastKey = t.key; S.lastPos = startAt; saveSettings();
   onTrackChange();
@@ -261,11 +285,18 @@ async function doPlay(deck = engine.deck) {
   }
 }
 
-async function onMediaError(deck) {
+async function onMediaError(deck, fromCodec = false) {
   const t = deck.track;
-  if (!t || !deck.a.getAttribute('src')) return;
+  if (!t || (!fromCodec && !deck.a.getAttribute('src'))) return;
+  const code = deck.a.error ? deck.a.error.code : 0;
+  // 브라우저 엔진이 못 푸는 형식(ALAC 가 든 m4a · ADPCM WAV · AC3 가 든 mka …) → 코덱 엔진으로 한 번 더
+  if (!fromCodec && !deck.codec && !deck.codecTried && codecSupported() && (code === 3 || code === 4)) {
+    startCodec(deck, t, platform.mediaUrl(t.key));
+    if (deck === engine.deck) await doPlay(deck);
+    return;
+  }
   // 안드로이드: 스트리밍이 막히면 파일을 통째로 읽어 다시 시도
-  if (platform.name === 'android' && !deck.blobTried) {
+  if (platform.name === 'android' && !deck.blobTried && !deck.codec && !fromCodec) {
     deck.blobTried = true;
     try {
       const r = await fetch(platform.mediaUrl(t.key));
@@ -371,8 +402,8 @@ function startCrossfade() {
   const from = engine.deck, to = engine.other, t = list[n];
   const xf = P.xf = { from, to, started: false, timer: 0 };
   engine.resetGain(to, 0); revokeBlob(to);
-  to.track = t; to.blobTried = true; to.pendingSeek = 0;
-  engine.load(to, platform.mediaUrl(t.key));
+  to.track = t; to.blobTried = true; to.codecFailed = false; to.pendingSeek = 0;
+  loadDeck(to, t);
   to.a.play().then(() => {
     if (P.xf !== xf) { engine.unload(to); return; }
     const j = list.indexOf(t);   // 기다리는 사이 목록이 바뀌었을 수 있다 (정렬 · 옮기기 · 빼기) → 그 곡의 지금 자리
@@ -461,6 +492,24 @@ function applyTags(t, info) {
   homeDirty();
 }
 setIdleHook(() => memHint());
+// 태그 파서가 모르는 형식(APE · WavPack · DSD · WMA …): 코덱 엔진(FFmpeg)이 읽은 태그 · 앨범아트
+setTagFallback(async (src, { picture }) => {
+  if (!codecSupported()) return null;
+  const url = typeof src === 'string' ? src : URL.createObjectURL(src);
+  try {
+    const { info: x, pic } = await codecProbe(url, { picture });
+    return { title: x.title, artist: x.artist, album: x.album, albumArtist: x.albumArtist, genre: x.genre, track: x.track, lyrics: x.lyrics,
+      duration: x.dur, picture: pic, fmt: codecFmt(x) };
+  } finally { if (typeof src !== 'string') URL.revokeObjectURL(url); }
+});
+/** 코덱 엔진 정보 → 화면에 보일 형식 { codec, rate, bits, ch, lossless, dsd, kbps } */
+function codecFmt(x) {
+  const names = { wavpack: 'WavPack', ape: 'APE', alac: 'ALAC', tta: 'TTA', tak: 'TAK', shorten: 'Shorten', flac: 'FLAC', wmav1: 'WMA', wmav2: 'WMA', wmapro: 'WMA Pro',
+    wmalossless: 'WMA 무손실', ac3: 'AC-3', eac3: 'E-AC-3', dca: 'DTS', truehd: 'TrueHD', mlp: 'MLP', mp1: 'MP1', mp2: 'MP2', mp3: 'MP3', mpc7: 'Musepack', mpc8: 'Musepack' };
+  let codec = names[x.codec] || (x.dsd ? 'DSD' : /^pcm_/.test(x.codec) ? ({ aiff: 'AIFF', caf: 'CAF', w64: 'Wave64' }[x.format] || 'PCM') : String(x.codec || '').toUpperCase());
+  if (x.dsd) codec = 'DSD' + Math.round(x.rate / 44100);
+  return { codec, rate: x.rate, bits: x.bits || 0, ch: x.ch, lossless: !!x.lossless, dsd: !!x.dsd, kbps: x.lossless ? 0 : x.kbps };
+}
 setTagSink((key, info) => {
   for (const p of pls) for (const t of p.tracks) if (t.key === key) { if (!t.tagged || t.genre == null) { applyTagsAll(key, info); saveList(); } return; }
 });
@@ -629,6 +678,7 @@ function renderNowPlaying() {
   updateSleepBadge();
 }
 function onTrackChange() {
+  setTimeout(renderOutput, 0);
   renderNowPlaying();
   renderPlHead();
   updateTimeUI(true);
@@ -710,6 +760,10 @@ function renderTransport() {
   $('pClose').onclick = closePlayer;
   $('pFrom').onclick = () => { if (playPl) { closePlayer(); showPlaylist(playPl); } };
   $('pMore').onclick = e => playerMenu(rectOf(e.currentTarget));
+  $('pSpeed').onclick = e => speedPopover(e.currentTarget);
+  $('pFx').onclick = () => { go('fx'); scroller.scrollTop = 0; };
+  $('pFx').replaceChildren(icon('fx'), el('b', {}, '음장'));
+  renderSpeed();
   document.querySelectorAll('[data-ptab]').forEach(b => b.addEventListener('click', () => setPlayerTab(PL.tab === b.dataset.ptab && narrow() ? null : b.dataset.ptab)));
   document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => {
     const from = TABS.indexOf(NAV.view === 'list' ? 'home' : NAV.view), to = TABS.indexOf(b.dataset.go);
@@ -865,7 +919,7 @@ function slideIn(dir) {
     sw = null;
     if (!narrow() || e.touches.length !== 1 || EDIT.on || DRAG || openModal || openMenuClose || PL.open) return;
     const t = e.touches[0], tg = e.target;
-    if (!tg.closest || tg.closest('input, select, textarea, .vs, .grip, .menu, .topbar')) return;
+    if (!tg.closest || tg.closest('input, select, textarea, .vs, .knob, .grip, .menu, .topbar')) return;
     if (t.clientX < 20 || t.clientX > innerWidth - 20) return;
     sw = { x: t.clientX, y: t.clientY, t: Date.now(), mode: null, dx: 0, view: $(VIEWS[NAV.view]), sx: scrollerX(tg) };
   }, { passive: true });
@@ -1824,11 +1878,12 @@ function activeFxCount() { return FX.filter(f => f.id !== 'limiter' && S.fx[f.id
 function updateBadges() {
   const n = S.fxOn ? activeFxCount() : 0;
   for (const id of ['fxBadge', 'fxBadgeM']) { const b = $(id); b.textContent = n; b.hidden = !n; }
+  const pf = $('pFx'); if (pf) pf.classList.toggle('on', n > 0);
 }
 function renderFx() {
   const pane = $('paneFx'), st0 = scroller.scrollTop;
   const top = el('div', { class: 'fxtop' },
-    el('div', {}, el('div', { class: 'label' }, '음장 효과'), el('div', { class: 'hint' }, S.fxOn ? `켜진 효과 ${activeFxCount()}개` : '꺼짐 — 원음으로 듣는 중')),
+    el('div', {}, el('div', { class: 'label' }, '음장 효과'), el('div', { class: 'hint', id: 'fxHint' })),
     el('span', { class: 'sp' }),
     activeFxCount() ? el('button', { class: 'link', onclick: () => applySoundPreset(SOUND_PRESETS[0]) }, '모두 끄기') : null,
     switchEl(S.fxOn, v => { S.fxOn = v; engine.setBypass(!v); saveSettings(); renderFx(); renderEq(); updateBadges(); toast(v ? '음장 효과를 켰어요' : '원음으로 들어요'); }, '음장 효과 전체 사용'));
@@ -1846,7 +1901,8 @@ function renderFx() {
     listEl.append(el('div', { class: 'cat' }, cat.name));
     for (const def of defs) listEl.append(fxCard(def));
   }
-  pane.replaceChildren(top, chips, listEl);
+  pane.replaceChildren(top, el('div', { class: 'label sub' }, '빠른 조절'), macroRow(), chips, listEl);
+  updateFxHint();
   if (NAV.view === 'fx') scroller.scrollTop = st0;
 }
 function fxCard(def) {
@@ -1856,6 +1912,7 @@ function fxCard(def) {
     st.on = v; S.preset = null;
     if (v && !S.fxOn) { S.fxOn = true; engine.setBypass(false); }
     engine.setEnabled(def.id, v); saveSettings();
+    if (def.id === 'speed') renderSpeed();
     card.replaceWith(fxCard(def)); refreshFxHeader();
   }, def.name);
   card.append(el('div', { class: 'fx-head', onclick: () => sw.click() },
@@ -1865,24 +1922,107 @@ function fxCard(def) {
 }
 function fxBody(def) {
   const st = fxState(def.id), body = el('div', { class: 'fx-body' });
+  const touch = () => { if (S.preset) { S.preset = null; refreshPresetChips(); } saveSettings(); };
+  const knobs = el('div', { class: 'knobs' });
   for (const p of def.params) {
-    const out = el('output', {}, p.type ? '' : fmtParam(p, st.p[p.k]));
-    const setP = v => { st.p[p.k] = v; engine.setParam(def.id, p.k, v); if (S.preset) { S.preset = null; refreshPresetChips(); } saveSettings(); };
-    let ctl;
-    if (p.type === 'select') ctl = p.options.length <= 4 ? segmented(p.options, st.p[p.k], setP) : selectEl(p.options, st.p[p.k], setP);
-    else if (p.type === 'toggle') ctl = switchEl(!!st.p[p.k], setP, p.label);
-    else ctl = rangeEl({ min: p.min, max: p.max, step: p.step, value: st.p[p.k], center: p.center, label: p.label, onInput: v => { setP(v); out.textContent = fmtParam(p, v); }, onReset: () => p.def });
-    body.append(el('div', { class: 'prm' }, el('label', {}, p.label), el('div', { class: 'ctl' }, ctl), out));
+    const setP = v => { st.p[p.k] = v; engine.setParam(def.id, p.k, v); if (def.id === 'speed') renderSpeed(); syncMacro(def.id, p.k); touch(); };
+    if (p.type === 'select') {
+      const ctl = p.options.length <= 4 ? segmented(p.options, st.p[p.k], setP) : selectEl(p.options, st.p[p.k], setP);
+      body.append(el('div', { class: 'prm' }, el('label', {}, p.label), el('div', { class: 'ctl' }, ctl)));
+    } else if (p.type === 'toggle') {
+      body.append(el('div', { class: 'prm' }, el('label', {}, p.label), el('div', { class: 'ctl' }, switchEl(!!st.p[p.k], setP, p.label))));
+    } else {
+      knobs.append(knob({ min: p.min, max: p.max, step: p.step, value: st.p[p.k], def: p.def, center: p.center, label: p.label, fmt: v => fmtParam(p, v), onInput: setP }));
+    }
   }
-  body.append(el('div', { class: 'fx-foot' }, el('button', {
-    class: 'link', onclick: () => {
-      st.p = defaultParams(def);
-      for (const [k, v] of Object.entries(st.p)) engine.setParam(def.id, k, v);
-      saveSettings(); body.replaceWith(fxBody(def));
-    },
-  }, '기본값으로')));
+  if (knobs.childElementCount) body.prepend(knobs);
+  body.append(el('div', { class: 'fx-foot' },
+    el('span', { class: 'hint' }, knobs.childElementCount ? (matchMedia('(pointer: coarse)').matches ? '휠을 좌우로 밀어 돌려요 · 두 번 누르면 기본값' : '휠을 위아래로 끌거나 마우스 휠로 돌려요 · 두 번 누르면 기본값') : ''),
+    el('button', {
+      class: 'link', onclick: () => {
+        st.p = defaultParams(def);
+        for (const [k, v] of Object.entries(st.p)) { engine.setParam(def.id, k, v); syncMacro(def.id, k); }
+        if (def.id === 'speed') renderSpeed();
+        saveSettings(); body.replaceWith(fxBody(def));
+      },
+    }, '기본값으로')));
   return body;
 }
+/* 빠른 조절: 맨 위의 휠 6개 — 휠 하나가 효과 하나의 대표 값 (0 이면 그 효과를 끔) */
+const macroKnobs = new Map();
+const macroOff = m => (m.center != null ? m.center : m.min);
+function macroRow() {
+  macroKnobs.clear();
+  const row = el('div', { class: 'macros', role: 'group', 'aria-label': '빠른 조절' });
+  for (const m of MACROS) {
+    const st = fxState(m.fx), p = FX_BY_ID[m.fx].params.find(x => x.k === m.k), off = macroOff(m);
+    const k = knob({
+      min: m.min, max: m.max, step: m.step, value: st.on && S.fxOn ? clamp(st.p[m.k], m.min, m.max) : off, def: off, center: m.center, label: m.label, size: 'm',
+      fmt: v => (v === off ? '끔' : fmtParam(p, v)), onInput: v => setMacro(m, v),
+    });
+    macroKnobs.set(m.fx + '.' + m.k, { m, k });
+    row.append(k);
+  }
+  return row;
+}
+function setMacro(m, v) {
+  const st = fxState(m.fx), on = v !== macroOff(m);
+  if (on) { st.p[m.k] = v; engine.setParam(m.fx, m.k, v); }          // 0 으로 돌려 끌 때는 값은 두고 끄기만 (다시 켜면 그 값)
+  if (on && !S.fxOn) { S.fxOn = true; engine.setBypass(false); }
+  if (on !== st.on) { st.on = on; engine.setEnabled(m.fx, on); }
+  S.preset = null; refreshPresetChips(); saveSettings(); updateBadges(); updateFxHint();
+  const card = document.querySelector(`#paneFx .fx[data-id="${m.fx}"]`);
+  if (card) card.replaceWith(fxCard(FX_BY_ID[m.fx]));
+}
+/** 효과 카드에서 값을 바꾸면 위의 빠른 조절 휠도 같이 */
+function syncMacro(fx, k) {
+  const it = macroKnobs.get(fx + '.' + k);
+  if (!it) return;
+  const st = fxState(fx);
+  it.k.setValue(st.on && S.fxOn ? clamp(st.p[k], it.m.min, it.m.max) : macroOff(it.m));
+}
+function updateFxHint() {
+  const h = $('fxHint');
+  if (h) h.textContent = S.fxOn ? (activeFxCount() ? `켜진 효과 ${activeFxCount()}개` : '켜진 효과 없음 — 원음') : '꺼짐 — 원음으로 듣는 중';
+}
+
+/* ======================= 재생 속도 (재생 화면) ======================= */
+const SPEEDS = [50, 75, 100, 125, 150, 200];
+const speedLabel = r => (r / 100).toFixed(r % 10 ? 2 : 1) + '×';            // 50 → 0.5×, 125 → 1.25×, 100 → 1.0×
+function curSpeed() { const st = fxState('speed'); return { rate: st.on ? st.p.rate : 100, keep: st.p.keep !== false }; }
+function renderSpeed() {
+  const b = $('pSpeed'); if (!b) return;
+  const { rate } = curSpeed();
+  b.replaceChildren(icon('speed'), el('b', {}, speedLabel(rate)));
+  b.classList.toggle('on', rate !== 100);
+}
+function applySpeed(rate, keep) {
+  const st = fxState('speed');
+  st.p.rate = rate; st.p.keep = keep;
+  const on = rate !== 100;
+  if (on !== st.on) { st.on = on; engine.setEnabled('speed', on); }
+  engine.setParam('speed', 'rate', rate); engine.setParam('speed', 'keep', keep);
+  saveSettings(); renderSpeed(); updateBadges();
+  const card = document.querySelector('#paneFx .fx[data-id="speed"]');
+  if (card) card.replaceWith(fxCard(FX_BY_ID.speed));
+}
+function speedPopover(anchor) {
+  const { rate, keep } = curSpeed();
+  const chips = el('div', { class: 'spd-chips' });
+  const paintChips = r => chips.querySelectorAll('button').forEach(c => c.setAttribute('aria-pressed', String(+c.dataset.r === r)));
+  for (const r of SPEEDS) chips.append(el('button', { class: 'chip', 'data-r': r, onclick: () => { kn.setValue(r); set(r); } }, speedLabel(r)));
+  const val = el('b', { class: 'num' }, speedLabel(rate));
+  const set = r => { applySpeed(r, curSpeed().keep); val.textContent = speedLabel(r); paintChips(r); };
+  const kn = knob({ min: 50, max: 200, step: 5, value: rate, def: 100, label: '속도', size: 'l', fmt: v => speedLabel(v), onInput: set });
+  const sw = switchEl(keep, v => applySpeed(curSpeed().rate, v), '음정 유지');
+  const box = el('div', { class: 'pop spd', role: 'dialog', 'aria-label': '재생 속도' },
+    el('div', { class: 'pop-h' }, el('span', {}, '재생 속도'), val),
+    chips, el('div', { class: 'spd-knob' }, kn),
+    el('label', { class: 'pop-row' }, el('span', {}, '음정 유지', el('small', {}, '빠르게 해도 목소리가 높아지지 않게')), sw));
+  paintChips(rate);
+  openPopover(anchor, box);
+}
+
 function refreshPresetChips() {
   document.querySelectorAll('#presetChips .chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
 }
@@ -2049,6 +2189,7 @@ function renderSettings() {
       srow('수면 타이머', P.sleepAt ? `${new Date(P.sleepAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}에 멈춰요` : '정해진 시간 뒤에 서서히 멈춤',
         segmented([[0, '끔'], [15, '15분'], [30, '30분'], [60, '1시간'], [90, '1시간 30분']], sleepVal, v => { setSleep(v); renderSettings(); })),
       srow('이어 듣기', '다시 열면 마지막 곡의 그 위치부터', switchEl(S.resume, v => { S.resume = v; saveSettings(); }, '이어 듣기'))),
+    outputGroup(),
     el('div', { class: 'sgroup' }, el('h3', {}, '가사'),
       srow('인터넷에서 가사 자동으로 찾기', '곡이 바뀌면 제목 · 가수 · 앨범 · 길이로 LRCLIB(lrclib.net)와 다른 사용자들이 고른 가사 목록에서 찾아요 · 앱을 보고 있지 않을 때(백그라운드 재생)는 찾지 않아요', switchEl(S.lyrAuto, v => { S.lyrAuto = v; saveSettings(); }, '가사 자동으로 찾기')),
       platform.network ? srow('모바일 데이터에서 가사 불러오기', '끄면 모바일 데이터로 연결돼 있을 때는 가사를 자동으로 찾지 않아요 (와이파이에 연결되면 찾아요 · 가사 화면의 [지금 찾기]는 언제든 돼요)',
@@ -2072,10 +2213,157 @@ function renderSettings() {
     el('div', { class: 'sgroup' }, el('h3', {}, '정보'),
       el('div', { class: 'srow about' }, el('div', {},
         el('b', {}, `울림 ${VERSION}`), el('br'),
-        '무료로 공개된 음장 기법만 사용했어요: Freeverb 리버브(Jezar, 퍼블릭 도메인), bs2b 헤드폰 크로스피드 공식(MIT), RBJ 오디오 EQ 필터 공식, 브라우저 엔진 내장 HRTF 입체음향, 크로스-코릴레이션 피치 시프트, 가상 저음 · 초저음, 크리스탈라이저 등.', el('br'),
+        '음장 엔진은 브라우저 엔진(Chromium)에 들어 있는 네이티브 오디오 처리(컨볼루션 잔향 · HRTF 입체음향 · 다이내믹스 · 필터, 2~4배 오버샘플링)로 만들어 끊김이 없어요. 공개된 기법: bs2b 헤드폰 크로스피드(MIT), RBJ 오디오 EQ 필터 공식, MaxxBass 방식 가상 저음, 크리스탈라이저 등.', el('br'),
+        '키 조절은 Signalsmith Stretch(MIT), 코덱 엔진은 FFmpeg 7.1.1(LGPL 2.1 이상 — 고치지 않고 wasm 으로 빌드, 소스 · 빌드 방법은 GitHub 의 codec 폴더와 릴리스 페이지)으로 DSD · APE · WavPack · ALAC · AIFF · WMA 등을 풀어요.', el('br'),
+        el('button', { class: 'link', onclick: showLicenses }, '오픈소스 라이선스 보기'), el('br'),
         '가사는 LRCLIB(lrclib.net) — 사용자들이 함께 만드는 무료 공개 가사 데이터베이스에서 가져오고, 음악 파일에 들어 있는 가사와 같은 이름의 .lrc 파일도 읽어요.', el('br'),
         el('button', { class: 'link', onclick: () => openExternal(`https://github.com/${REPO}`) }, `github.com/${REPO}`), el('br'),
         `${platform.name === 'android' ? 'Android System WebView' : platform.name === 'electron' ? 'Electron · Chromium' : '브라우저'} 위에서 Web Audio API로 동작해요.`))));
+}
+/* ---------- 고음질 출력 (DAC) ---------- */
+const OUT = { info: null, sinks: null };
+const kHz = r => (r % 1000 ? (r / 1000).toFixed(1) : r / 1000) + 'kHz';
+/** 파일 형식 한 줄: 'FLAC · 24bit · 96kHz · 무손실' */
+function fmtLine(f) {
+  if (!f) return '';
+  const parts = [f.codec];
+  if (f.dsd) parts.push((f.rate / 1e6).toFixed(1) + 'MHz 1bit');
+  else { if (f.bits) parts.push(f.bits + 'bit'); if (f.rate) parts.push(kHz(f.rate)); }
+  if (f.kbps) parts.push(f.kbps + 'kbps');
+  if (f.ch > 2) parts.push(f.ch + '채널');
+  parts.push(f.lossless || f.dsd ? '무손실' : '손실 압축');
+  return parts.join(' · ');
+}
+async function curFmt() {
+  const d = engine.deck, t = d.track;
+  if (!t) return null;
+  if (d.fmt) return d.fmt;
+  if (d.codec) return null;                     // 코덱 엔진이 곧 알려 줌 (oninfo) — 파일을 한 번 더 열지 않음
+  const info = await tagInfo(t).catch(() => null);
+  return info && info.fmt ? info.fmt : null;
+}
+const OUT_NAMES = { usb: 'USB DAC', wired: '유선 이어폰', bt: '블루투스', ble: '블루투스 LE', speaker: '휴대폰 스피커', hdmi: 'HDMI', other: '외부 장치' };
+/** 재생 화면의 짧은 형식 표시: 'FLAC 24/96' · 'DSD64' · 'MP3 320k' (고해상도면 강조색) */
+function shortFmt(f) {
+  if (!f) return '';
+  if (f.dsd) return f.codec;
+  const r = f.rate ? (f.rate % 1000 ? (f.rate / 1000).toFixed(1) : f.rate / 1000) : '';
+  if (f.lossless) return `${f.codec}${f.bits && r ? ` ${f.bits}/${r}` : r ? ` ${r}k` : ''}`;
+  return f.kbps ? `${f.codec} ${Math.round(f.kbps)}k` : f.codec;
+}
+async function renderFmtTag() {
+  const tag = $('pFmt');
+  if (!tag) return;
+  const f = await curFmt().catch(() => null);
+  tag.textContent = shortFmt(f);
+  tag.hidden = !tag.textContent;
+  tag.classList.toggle('hr', !!f && (f.dsd || (f.lossless && ((f.bits || 0) >= 24 || (f.rate || 0) > 48000))));
+  tag.title = f ? fmtLine(f) : '';
+}
+async function renderOutput() {
+  renderFmtTag();
+  const box = $('outPath');
+  if (!box) return;
+  const row = (k, v, hint) => el('div', { class: 'op-row' }, el('span', { class: 'op-k' }, k), el('span', { class: 'op-v' }, v, hint ? el('small', {}, hint) : null));
+  const f = await curFmt().catch(() => null);
+  const t = engine.deck.track, sr = engine.ctx.sampleRate;
+  const fileLine = !t ? '곡을 재생하면 보여요' : fmtLine(f) || (t.name || '').split('.').pop().toUpperCase();
+  let fileHint = '';
+  if (f && f.dsd && engine.deck.codec && engine.deck.codec.out) fileHint = `DSD → ${kHz(engine.deck.codec.out.rate)} 24bit PCM으로 바꿔 재생 (무손실 FLAC으로 넘김)`;
+  else if (engine.deck.codec) fileHint = '코덱 엔진(FFmpeg)으로 풀어 재생';
+  const n = activeFxCount() + (S.eq.on ? 1 : 0), sp = engine.speed.rate !== 100;
+  const procLine = `32bit 실수 · ${kHz(sr)}` + (engine.procOn ? ` · 음장 효과 ${n}개` : ' · 원음 그대로');
+  let procHint = engine.procOn ? '효과를 모두 끄면 원음을 한 비트도 바꾸지 않고 내보내요' : '효과가 꺼져 있어 소리를 바꾸지 않아요' + (S.volume < 1 ? ' (볼륨만 디지털로 조절)' : '');
+  if (f && f.rate && !f.dsd && f.rate !== sr) procHint = `파일 ${kHz(f.rate)} → ${kHz(sr)}로 고품질 변환 · ` + procHint;
+  if (sp) procHint = `속도 ${(engine.speed.rate / 100).toFixed(2)}× · ` + procHint;
+  let outLine = '', outHint = '';
+  const o = OUT.info;
+  if (platform.name === 'android' && o) {
+    const d = o.out || {}, name = OUT_NAMES[d.type] || '출력 장치';
+    outLine = name + (d.name && d.type !== 'speaker' ? ` (${d.name})` : '');
+    if (d.type === 'usb') {
+      if (o.mixer) outLine += ` · ${o.mixer.bits}bit${o.mixer.float ? ' 실수' : ''} · ${kHz(o.mixer.rate)}`;
+      outHint = !o.hires ? '안드로이드 14 이상에서는 DAC가 받는 최고 품질로 내보낼 수 있어요' : o.mode === 'off' ? '안드로이드 기본 형식으로 내보내요' : o.mixer ? 'DAC가 받는 최고 품질로 내보내요' : '이 DAC는 형식을 바꿀 수 없어요 (안드로이드 기본)';
+    } else if (d.type === 'bt' || d.type === 'ble') outHint = '블루투스는 휴대폰과 이어폰이 고른 코덱(LDAC · aptX · AAC 등)으로 보내요';
+    else outHint = `휴대폰 DAC · ${kHz(o.native || sr)}`;
+  } else {
+    const sinks = OUT.sinks || [], cur = sinks.find(x => x.deviceId === (engine.sinkId || 'default')) || sinks.find(x => x.deviceId === 'default');
+    outLine = (cur && cur.label) || (engine.sinkId ? '고른 출력 장치' : '시스템 기본 장치');
+    outHint = platform.name === 'electron' ? `Windows 공유 모드 · ${kHz(sr)} 32bit 실수로 보냄 — 장치 형식은 Windows 소리 설정에서` : `${kHz(sr)} 32bit 실수`;
+  }
+  box.replaceChildren(row('파일', fileLine, fileHint), el('div', { class: 'op-arrow' }, '↓'), row('앱 처리', procLine, procHint), el('div', { class: 'op-arrow' }, '↓'), row('출력', outLine, outHint));
+}
+async function listSinks() {
+  try { OUT.sinks = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput'); } catch (e) { OUT.sinks = []; }
+  return OUT.sinks;
+}
+function outputGroup() {
+  const g = el('div', { class: 'sgroup', id: 'outGroup' }, el('h3', {}, '고음질 출력 (DAC)'), el('div', { class: 'opath', id: 'outPath' }));
+  const A = platform.audioOut;
+  if (platform.name === 'android' && A && A.info) {
+    const o = OUT.info = A.info();
+    if (o.hires) {
+      const opts = [['auto', '자동 (최고 품질)'], ['off', '안드로이드 기본'], ...(o.options || []).map(x => [`${x.rate}/${x.enc}`, `${x.bits}bit${x.float ? ' 실수' : ''} · ${kHz(x.rate)}`])];
+      g.append(srow('USB DAC 출력 형식', (o.out && o.out.type === 'usb') ? 'DAC가 받는 형식 중에서 골라요 · 자동은 가장 높은 비트와 샘플레이트(최대 192kHz)' : 'USB DAC를 연결하면 적용돼요',
+        selectEl(opts, opts.some(x => x[0] === o.mode) ? o.mode : 'auto', v => { A.setMode(v); })));
+    } else g.append(srow('USB DAC 출력 형식', '안드로이드 14 이상에서 USB DAC로 최고 품질(예: 32bit · 192kHz)을 직접 고를 수 있어요. 지금은 안드로이드가 정한 형식으로 나가요'));
+    if (o.out && (o.out.type === 'bt' || o.out.type === 'ble'))
+      g.append(srow('블루투스 음질', 'LDAC를 지원하는 이어폰이면 휴대폰 설정 → 개발자 옵션 → 블루투스 오디오 LDAC 코덱의 재생 품질을 \'오디오 품질에 최적화됨(990kbps)\'으로 두면 가장 좋아요'));
+  } else if (A && A.pickSink && engine.canPickSink) {
+    const sel = selectEl([['', '시스템 기본 장치']], engine.sinkId, async v => {
+      const lab = (OUT.sinks || []).find(x => x.deviceId === v);
+      const ok = await engine.setSink(v === 'default' ? '' : v);
+      if (!ok) { toast('그 장치로 바꾸지 못했어요'); return; }
+      S.sink = v && v !== 'default' ? { id: v, label: lab ? lab.label : '' } : null; saveSettings();
+      // 장치의 샘플레이트가 지금과 다르면: 다음에 열 때 그 장치에 맞춰 연다(앱 안 변환 없이)
+      let hw = 0; try { const c = new AudioContext({ sinkId: v && v !== 'default' ? v : undefined }); hw = c.sampleRate; c.close(); } catch (e) { /* noop */ }
+      toast(hw && hw !== engine.ctx.sampleRate ? `출력 장치를 바꿨어요 · 앱을 다시 열면 이 장치의 ${kHz(hw)}로 맞춰요` : '출력 장치를 바꿨어요');
+      renderOutput();
+    });
+    sel.id = 'sinkSel';
+    listSinks().then(sinks => {
+      const cur = engine.sinkId;
+      sel.replaceChildren(...[['', '시스템 기본 장치'], ...sinks.filter(d => d.deviceId !== 'default' && d.deviceId !== 'communications').map((d, i) => [d.deviceId, d.label || `출력 장치 ${i + 1}`])]
+        .map(([v, l]) => el('option', { value: v, selected: v === cur || null }, l)));
+      renderOutput();
+    });
+    g.append(srow('출력 장치', 'USB DAC · 오디오 인터페이스를 고르면 그 장치로 내보내요', sel));
+    if (platform.audioOut.openSoundSettings && navigator.userAgent.includes('Windows'))
+      g.append(srow('장치 형식 (비트 · 샘플레이트)', 'Windows 소리 설정 → 출력 장치 속성 → 형식에서 24비트 · 192000Hz 처럼 높이면, 앱을 다시 열 때 그 형식으로 맞춰 내보내요',
+        el('button', { class: 'btn', onclick: () => platform.audioOut.openSoundSettings() }, '소리 설정 열기')));
+  }
+  setTimeout(renderOutput, 0);
+  return g;
+}
+if (platform.audioOut && platform.audioOut.onChange) platform.audioOut.onChange(o => {
+  const prev = OUT.info && OUT.info.out && OUT.info.out.type;
+  OUT.info = o;
+  if ($('outGroup')) { if (prev !== (o.out && o.out.type)) renderSettings(); else renderOutput(); }
+});
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener && platform.audioOut && platform.audioOut.pickSink) {
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    const sinks = await listSinks();
+    if (S.sink && S.sink.id && !sinks.some(d => d.deviceId === S.sink.id)) {       // 고른 장치가 빠짐 → 기본 장치로
+      await engine.setSink(''); toast('출력 장치가 빠져 기본 장치로 내보내요');
+    } else if (S.sink && S.sink.id && engine.sinkId !== S.sink.id && sinks.some(d => d.deviceId === S.sink.id)) {
+      await engine.setSink(S.sink.id);                                             // 다시 꽂음 → 그 장치로
+    }
+    if ($('outGroup')) renderSettings();
+  });
+}
+
+/** 함께 쓰는 공개 소프트웨어의 라이선스 전문 */
+async function showLicenses() {
+  const parts = await Promise.all([['Signalsmith Stretch (MIT)', 'js/vendor/LICENSE-signalsmith-stretch.txt'], ['FFmpeg (LGPL 2.1 이상)', 'js/vendor/LICENSE-ffmpeg-LGPL-2.1.txt']]
+    .map(async ([name, path]) => { let t = ''; try { t = await (await fetch(path)).text(); } catch (e) { t = '(읽지 못함)'; } return [name, t]; }));
+  const prev = openModal;
+  const close = () => { m.remove(); openModal = prev; };
+  const m = el('div', { class: 'modal', onclick: e => { if (e.target === m) close(); } },
+    el('div', { class: 'dialog lic', role: 'dialog', 'aria-modal': 'true' }, el('h3', {}, '오픈소스 라이선스'),
+      el('p', {}, 'FFmpeg 은 고치지 않은 7.1.1 판을 codec 폴더의 설정(build_codec.sh)으로 빌드했어요. FFmpeg 소스는 GitHub 릴리스 페이지에서 받을 수 있어요.'),
+      el('div', { class: 'lic-body' }, ...parts.flatMap(([name, t]) => [el('h4', {}, name), el('pre', {}, t)])),
+      el('div', { class: 'acts' }, el('button', { class: 'btn primary', onclick: close }, '닫기'))));
+  document.body.append(m); openModal = close;
 }
 async function resetSound() {
   const ok = await dialog({ title: '음장 효과를 초기화할까요?', text: '모든 효과와 이퀄라이저가 기본값으로 돌아가요.', okText: '초기화' });
@@ -2541,6 +2829,22 @@ function openMenu(anchor, items, { align = 'right' } = {}) {
   openMenuClose = close;
 }
 
+/** 작은 창 (재생 속도 등): 메뉴처럼 버튼 근처에 뜨고 바깥을 누르거나 Esc 로 닫힘 */
+function openPopover(anchor, box) {
+  if (openMenuClose) openMenuClose();
+  box.classList.add('menu');
+  document.body.append(box);
+  const r = anchor.getBoundingClientRect(), mw = box.offsetWidth, mh = box.offsetHeight;
+  box.style.left = clamp(r.left + r.width / 2 - mw / 2, 8, innerWidth - mw - 8) + 'px';
+  box.style.top = (r.bottom + 8 + mh > innerHeight ? Math.max(8, r.top - mh - 8) : r.bottom + 8) + 'px';
+  const onDoc = e => { if (!box.contains(e.target) && !anchor.contains(e.target)) close(); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  function close() { box.remove(); document.removeEventListener('pointerdown', onDoc, true); document.removeEventListener('keydown', onKey); openMenuClose = null; }
+  setTimeout(() => { document.addEventListener('pointerdown', onDoc, true); document.addEventListener('keydown', onKey); }, 0);
+  openMenuClose = close;
+  const f = box.querySelector('.knob, button'); if (f) f.focus({ preventScroll: true });
+}
+
 /* ======================= 키보드 · 끌어놓기 · 뒤로가기 ======================= */
 document.addEventListener('keydown', e => {
   if (e.defaultPrevented) return;
@@ -2548,7 +2852,7 @@ document.addEventListener('keydown', e => {
   if (openMenuClose) return;                     // 메뉴가 열려 있으면 메뉴가 처리 (Esc 로 닫기)
   const tg = e.target;
   if (tg.closest && tg.closest('input[type=text]') && e.key === 'Escape') { if (tg.id === 'searchInput') { toggleSearch(false); tg.blur(); } return; }
-  if (tg.closest && (tg.closest('input[type=text], select, .vs, .menu') || (tg.matches('input[type=range]') && e.key.startsWith('Arrow')))) return;
+  if (tg.closest && (tg.closest('input[type=text], select, .vs, .knob, .menu') || (tg.matches('input[type=range]') && e.key.startsWith('Arrow')))) return;
   if (e.key === 'Enter' && tg.closest && tg.closest('button, [role=button]')) return;
   const a = engine.deck.a, ctrl = e.ctrlKey || e.metaKey;
   if (EDIT.on && e.key === 'Escape') { exitEdit(); return; }

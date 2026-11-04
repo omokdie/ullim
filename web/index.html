@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' blob: data: https://lrclib.net https://raw.githubusercontent.com https://ntfy.sh; worker-src 'self' blob:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' blob: data: https://lrclib.net https://raw.githubusercontent.com https://ntfy.sh; worker-src 'self' blob:">
 <title>울림</title>
 <link rel="icon" href="img/icon.png">
 <link rel="stylesheet" href="css/app.css">
@@ -107,6 +107,7 @@
     <div class="pl-left">
       <div class="pl-art" id="pArt"><span class="i" data-icon="note"></span><img id="pArtImg" alt="" hidden><canvas class="pl-viz" id="pViz" aria-hidden="true"></canvas></div>
       <div class="pl-meta"><div class="t" id="pTitle"></div><div class="s" id="pSub"></div></div>
+      <div class="pl-acts"><button class="pchip" id="pSpeed" title="재생 속도" aria-label="재생 속도" aria-haspopup="dialog"></button><button class="pchip" id="pFx" title="음장 효과로 가기" aria-label="음장 효과로 가기"></button><span class="pfmt" id="pFmt" hidden></span></div>
       <div class="pl-seek"><input type="range" id="pSeek" min="0" max="1000" value="0" step="1" aria-label="재생 위치"><div class="times num"><span id="pCur">0:00</span><span id="pDur">0:00</span></div></div>
       <div class="pl-ctrl">
         <button class="ib" id="pShuffle" title="무작위 재생" aria-label="무작위 재생"></button>
