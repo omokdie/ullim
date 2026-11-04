@@ -1,15 +1,15 @@
 {
-  "version": "1.1.0",
-  "notes": "플레이리스트 여러 개 · 자동 업데이트",
+  "version": "1.1.1",
+  "notes": "안드로이드 설치 문제 해결",
   "windows": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.1.0/Ullim-Setup-1.1.0.exe",
-    "sha256": "25d46f38c44975862bb88cb8562312b909b9d4eb237979f6a6bfe5a9b25eb482",
-    "size": 104451234
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.1.1/Ullim-Setup-1.1.1.exe",
+    "sha256": "1466f488208934fb37bc13768700b2afbb315fb52e2cf8fe2c94d3b5596f0f7f",
+    "size": 104461840
   },
   "android": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.1.0/Ullim-1.1.0.apk",
-    "sha256": "1bdd90e06796e008a73ecca6e96d52067af1a60c3ce45ad07eb3584db83355fa",
-    "size": 301711,
-    "versionCode": 4
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.1.1/Ullim-1.1.1.apk",
+    "sha256": "6237627bed5f187fe85d8f7f356a444ba3bb0401811cfeb8bde84a22c365586e",
+    "size": 293519,
+    "versionCode": 5
   }
 }
