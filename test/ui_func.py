@@ -56,11 +56,12 @@ with sync_playwright() as p:
     pg.evaluate("__ullim.applySoundPreset({id:'off', name:'원음', fx:{}, eqOff:true})"); time.sleep(0.5)
     R['after_off_chain'] = pg.evaluate('__ullim.engine._chain')
     # remove current track while playing
+    pg.evaluate('__ullim.showPlaylist(__ullim.playPl)'); time.sleep(0.4)
     n_before = pg.evaluate('__ullim.list.length'); idx = cur()['i']
     pg.hover(f'.row[data-i="{idx}"]'); pg.click(f'.row[data-i="{idx}"] .x'); pg.click('.menu button:has-text("이 목록에서 빼기")'); time.sleep(1.0)
     R['remove_current'] = {'n_before': n_before, 'n_after': pg.evaluate('__ullim.list.length'), 'now': cur()}
     # sort by title
-    pg.click('#btnListMenu'); pg.click('.menu button:has-text("정렬…")'); pg.click('.menu button:has-text("제목 순")'); time.sleep(0.3)
+    pg.click('#plMenu'); pg.click('.menu button:has-text("정렬…")'); pg.click('.menu button:has-text("제목 순")'); time.sleep(0.3)
     R['sorted_titles'] = pg.evaluate('__ullim.list.map(t => t.title || t.name)')
     R['cur_after_sort'] = cur()
     # save user preset through the dialog
@@ -68,7 +69,8 @@ with sync_playwright() as p:
     pg.click('.chip.add'); pg.fill('.dialog input', '테스트 프리셋'); pg.click('.dialog .primary'); time.sleep(0.3)
     R['user_presets'] = pg.evaluate("JSON.parse(localStorage.getItem('ullim.userpresets.v1')).map(p => p.name)")
     # search
-    pg.click('#btnSearch'); pg.fill('#searchInput', '노래'); time.sleep(0.4)
+    pg.evaluate("__ullim.setTab('list')"); time.sleep(0.3)
+    pg.click('#btnFind'); pg.fill('#searchInput', '노래'); time.sleep(0.4)
     R['search_rows'] = pg.evaluate("[...document.querySelectorAll('.row .t1')].map(e => e.textContent)")
     # reload -> resume
     pg.evaluate('__ullim.engine.deck.a.currentTime = 10'); time.sleep(0.3)

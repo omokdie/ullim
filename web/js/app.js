@@ -6,9 +6,12 @@ import { readTags } from './tags.js';
 import { platform } from './platform.js';
 import { ICONS, icon } from './icons.js';
 import { fetchLatest, isNewer } from './update.js';
+import { lens, setGlass, watchPower, isSaving } from './glass.js';
+import { thumb, peek, setSource as setThumbSource, setTagSink, forgetPending, fallbackStyle } from './thumbs.js';
+import { autoSync, saveAnchors, applyAnchors } from './autosync.js';
 import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO, LookupError, cacheShrink } from './lyrics.js';
 
-const VERSION = '1.1.1';
+const VERSION = '1.2.0';
 const $ = id => document.getElementById(id);
 const app = $('app');
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -34,7 +37,8 @@ function el(tag, props, ...kids) {
 }
 document.querySelectorAll('[data-icon]').forEach(n => { n.innerHTML = ICONS[n.dataset.icon] || ''; });
 const setIcon = (btn, name) => btn.replaceChildren(icon(name));
-const narrow = () => matchMedia('(max-width: 760px)').matches;
+const PHONE_MQ = matchMedia('(max-width: 899px)');
+const narrow = () => PHONE_MQ.matches;          // 휴대폰 배치 (아래 메뉴 · 미니 플레이어)
 
 /* ======================= 저장 ======================= */
 const LS = { set: 'ullim.settings.v1', list: 'ullim.playlist.v1', pls: 'ullim.playlists.v2', pre: 'ullim.userpresets.v1' };
@@ -44,7 +48,7 @@ const DEF_EQ = () => ({ on: false, preset: 'flat', p: Object.fromEntries([['prea
 const S = Object.assign({
   volume: 0.8, muted: false, repeat: 'all', shuffle: false, crossfade: 0, theme: 'system', accent: 'blue',
   fxOn: true, fx: { limiter: { on: true, p: defaultParams(FX_BY_ID.limiter) } }, eq: DEF_EQ(), preset: null,
-  resume: true, lastKey: null, lastPos: 0, tab: 'list', lyrAuto: true, lyrShare: true, lyrSize: 20, autoUpdate: true, lastVersion: null, updHidden: null,
+  resume: true, lastKey: null, lastPos: 0, lyrAuto: true, lyrShare: true, lyrSync: true, lyrSize: 22, autoUpdate: true, lastVersion: null, updHidden: null, glass: 'auto',
 }, load(LS.set, {}));
 if (!S.eq || !S.eq.p) S.eq = DEF_EQ();
 if (!S.fx) S.fx = {};
@@ -64,11 +68,12 @@ FX.forEach(d => fxState(d.id));
    list   = playPl.tracks — 재생 · 다음 곡 · 가사 등 재생 쪽 코드는 모두 list 를 쓴다
    같은 음악 파일이 여러 플레이리스트에 들어갈 수 있고, 곡 객체는 플레이리스트마다 따로 둔다 */
 let uid = 0;
-const mkTrack = o => ({ id: ++uid, key: o.key, name: o.name || o.key, title: o.title || '', artist: o.artist || '', album: o.album || '', duration: o.duration || 0, tagged: !!o.tagged, bad: false });
+// genre: 읽은 장르 ('' = 장르 없음), undefined = 아직 안 읽음 (1.1.x 에서 옮겨 온 곡 → 조금씩 다시 읽음)
+const mkTrack = o => ({ id: ++uid, key: o.key, name: o.name || o.key, title: o.title || '', artist: o.artist || '', album: o.album || '', duration: o.duration || 0, tagged: !!o.tagged, genre: o.genre, bad: false });
 // 저장: 곡 정보는 한 번만(tracks), 플레이리스트에는 그 번호만 → 같은 곡이 여러 목록에 있어도 저장 공간을 거의 안 씀
-const packRow = t => [t.key, t.name, t.title, t.artist, t.album, Math.round(t.duration * 10) / 10, t.tagged ? 1 : 0];
+const packRow = t => [t.key, t.name, t.title, t.artist, t.album, Math.round(t.duration * 10) / 10, t.tagged ? 1 : 0, t.genre == null ? null : t.genre];
 const str = v => v == null ? '' : String(v);
-const unpackRow = r => mkTrack({ key: String(r[0]), name: str(r[1]), title: str(r[2]), artist: str(r[3]), album: str(r[4]), duration: Number(r[5]) || 0, tagged: !!r[6] });
+const unpackRow = r => mkTrack({ key: String(r[0]), name: str(r[1]), title: str(r[2]), artist: str(r[3]), album: str(r[4]), duration: Number(r[5]) || 0, tagged: !!r[6], genre: r[7] == null ? undefined : str(r[7]) });
 const unpackTrack = o => mkTrack({ key: String(o.k), name: str(o.n), title: str(o.t), artist: str(o.a), album: str(o.al), duration: Number(o.d) || 0, tagged: !!o.g });   // 1.0.x 형식
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const mkPl = (name, tracks = [], id = newId()) => ({ id, name, tracks });
@@ -104,11 +109,12 @@ function savePlaylists() {
   const ref = t => {
     let i = at.get(t.key);
     if (i == null) { i = rows.length; at.set(t.key, i); rows.push(packRow(t)); }
-    else if (t.tagged && !rows[i][6]) rows[i] = packRow(t);      // 태그를 읽은 쪽 정보로
+    else if ((t.tagged && !rows[i][6]) || (t.genre != null && rows[i][7] == null)) rows[i] = packRow(t);      // 태그 · 장르를 읽은 쪽 정보로
     return i;
   };
   const lists = pls.map(p => ({ id: p.id, name: p.name, items: p.tracks.map(ref) }));
-  const data = { v: 2, play: playPl.id, shown: shown.id, tracks: rows, lists };
+  const real = p => (p && !p.virtual ? p : P.lastReal && pls.includes(P.lastReal) ? P.lastReal : pls[0]);
+  const data = { v: 2, play: real(playPl).id, shown: real(shown).id, tracks: rows, lists };
   let ok = store(LS.pls, data);
   if (!ok) {
     // 저장 공간 부족: 가사 임시 저장을 줄이고, 옛(1.0.x) 형식 목록을 비운 뒤 한 번 더 (그래도 안 되면 옛 목록은 되돌림)
@@ -123,23 +129,69 @@ function savePlaylists() {
   if (ok) saveWarned = false;
 }
 let v1Cleared = false, saveWarned = false;
-const saveList = debounce(savePlaylists, 600);
+const saveListSoon = debounce(savePlaylists, 600);
+const saveList = () => { saveListSoon(); homeDirty(); };   // 저장하면서 홈 · 왼쪽 목록도 (잠시 뒤 한 번) 새로
 /** 안드로이드: 어느 플레이리스트에도 남지 않은 파일만 읽기 권한을 돌려준다 */
 function releaseUnused(keys) {
   if (!platform.release || !keys.length) return;
   const used = new Set();
   for (const p of pls) for (const t of p.tracks) used.add(t.key);
+  for (const p of [playPl, shown]) if (p && p.virtual) for (const t of p.tracks) used.add(t.key);
   const gone = [...new Set(keys)].filter(k => !used.has(k));
   if (gone.length) platform.release(gone);
 }
 const displayTitle = t => (t && (t.title || stripExt(t.name.split(/[\\/]/).pop()))) || '';
+
+/* ======================= 라이브러리 · 장르 · 최근에 들은 곡 =======================
+   가상 목록(최근에 들은 곡 · 장르 · 모든 곡)은 저장하지 않는 읽기 전용 목록. 재생은 보통 플레이리스트처럼 된다 */
+function library() {           // 모든 플레이리스트의 곡, 같은 파일은 한 번 (태그를 읽은 쪽 우선)
+  const m = new Map();
+  for (const p of pls) for (const t of p.tracks) { const o = m.get(t.key); if (!o || (!o.tagged && t.tagged) || (o.genre == null && t.genre != null)) m.set(t.key, t); }
+  return m;
+}
+const GENRE_MAP = [
+  [/^(ballad|power ballad|발라드)$/, '발라드'], [/^(dance|eurodance|disco|댄스)$/, '댄스'],
+  [/^(k-?pop|kpop|korean pop|가요|케이팝|아이돌|국내\s*가요)$/, 'K-POP'], [/^(hip-?hop|rap|gangsta|랩|힙합|랩\/힙합|국내\s*랩\/힙합)$/, '랩/힙합'],
+  [/^(r&b|rnb|r&b\/soul|soul|알앤비|알앤비\/소울|r&b\/소울)$/, 'R&B/소울'], [/^(rock|록|락|록\/메탈|rock\/metal|metal|heavy metal|hard rock|alternative|alternative rock|punk|punk rock)$/, '록/메탈'],
+  [/^(pop|팝|j-?pop|synthpop)$/, '팝'], [/^(indie|인디|인디음악|국내\s*인디)$/, '인디'], [/^(trot|트로트|성인가요|성인가요\/트로트)$/, '트로트'],
+  [/^(electronic|electronica|edm|house|techno|trance|일렉트로니카)$/, '일렉트로니카'], [/^(folk|blues|포크|블루스|포크\/블루스)$/, '포크/블루스'],
+  [/^(jazz|acid jazz|재즈)$/, '재즈'], [/^(classical|classic|클래식)$/, '클래식'], [/^(soundtrack|ost|국내드라마|드라마|영화|애니메이션|게임)$/, 'OST'],
+  [/^(lo-?fi|lofi|로파이)$/, '로파이'], [/^(ccm|gospel|christian|contemporary christian)$/, 'CCM'], [/^(children|동요|키즈)$/, '동요'],
+];
+function genreLabel(g) {
+  const s = String(g || '').trim();
+  if (!s) return '';
+  const k = s.toLowerCase().replace(/\s+/g, ' ');
+  for (const [re, name] of GENRE_MAP) if (re.test(k)) return name;
+  return s.length > 18 ? s.slice(0, 18) : s;
+}
+const RECENT_KEY = 'ullim.recent.v1';
+let recent = (() => { const a = load(RECENT_KEY, []); return Array.isArray(a) ? a.filter(x => x && typeof x.k === 'string').slice(0, 150) : []; })();
+const saveRecent = debounce(() => store(RECENT_KEY, recent), 1500);
+function noteRecent(t) {
+  if (!t) return;
+  recent = [{ k: t.key, at: Date.now() }, ...recent.filter(r => r.k !== t.key)].slice(0, 150);
+  saveRecent(); homeDirty();
+}
+function virtualPl(id, name, tracks, kind) { return { id, name, kind, virtual: true, tracks: tracks.slice() }; }   // 곡 객체는 진짜 목록과 함께 씀
+const byTitle = (a, b) => displayTitle(a).localeCompare(displayTitle(b), 'ko', { numeric: true, sensitivity: 'base' });
+function recentPl() { const lib = library(); return virtualPl('v:recent', '최근에 들은 곡', recent.map(r => lib.get(r.k)).filter(Boolean), 'recent'); }
+function genreGroups(lib = library()) {
+  const g = new Map();
+  for (const t of lib.values()) { if (t.genre == null) continue; const k = genreLabel(t.genre) || '장르 없음'; if (!g.has(k)) g.set(k, []); g.get(k).push(t); }
+  return [...g.entries()].sort((a, b) => (a[0] === '장르 없음') - (b[0] === '장르 없음') || b[1].length - a[1].length || a[0].localeCompare(b[0], 'ko'))
+    .map(([name, tracks]) => ({ name, tracks: tracks.sort(byTitle) }));
+}
+function genrePl(name) { const grp = genreGroups().find(x => x.name === name); return virtualPl('v:genre:' + name, name, grp ? grp.tracks : [], 'genre'); }
+function allSongsPl() { return virtualPl('v:all', '모든 곡', [...library().values()].sort(byTitle), 'all'); }
+const KIND_LABEL = { recent: '최근에 들은 곡', genre: '장르', all: '모든 곡' };
 const subLine = t => [t.artist, t.album].filter(Boolean).join(' · ') || '알 수 없는 아티스트';
 
 /* ======================= 엔진 ======================= */
 const engine = new Engine();
 engine.setVolume(S.volume, S.muted);
 engine.addEventListener('fxerror', e => toast(`'${(FX_BY_ID[e.detail] || {}).name || e.detail}' 효과를 이 기기에서 쓸 수 없어요`));
-const P = { index: -1, xf: null, errors: 0, sleepAt: 0, sleepTimer: 0, sleepFading: false, artUrl: null, dragging: false, lastSave: 0, lastSide: 'fx' };
+const P = { index: -1, xf: null, errors: 0, sleepAt: 0, sleepTimer: 0, sleepFading: false, artUrl: null, dragging: false, pDragging: false, lastSave: 0, lastReal: null, noted: null, seekAt: 0 };
 const isPlaying = () => P.index >= 0 && !engine.deck.a.paused;
 
 engine.decks.forEach(deck => {
@@ -333,6 +385,7 @@ function endCrossfade() {
 function onTime() {
   const a = engine.deck.a;
   if (!vizRAF) { updateTimeUI(); syncLyrics(); }
+  if (!P.noted && a.currentTime > 5 && list[P.index]) { P.noted = true; noteRecent(list[P.index]); }
   if (S.crossfade > 0 && !P.xf && !a.paused && S.repeat !== 'one' && isFinite(a.duration) &&
       a.duration > S.crossfade * 2 + 3 && a.duration - a.currentTime <= S.crossfade + 0.3) startCrossfade();
   const now = Date.now();
@@ -373,7 +426,7 @@ function pumpMeta() {
     const t = metaQ.shift();
     if (t.tagged || t.removed) continue;
     metaRunning++;
-    readTags(platform.tagSource(t.key)).then(info => applyTags(t, info)).catch(() => { t.tagged = true; })
+    readTags(platform.tagSource(t.key)).then(info => applyTagsAll(t.key, info)).catch(() => { t.tagged = true; if (t.genre == null) t.genre = ''; })
       .finally(() => { metaRunning--; scheduleRows(); saveList(); pumpMeta(); });
   }
 }
@@ -382,9 +435,14 @@ function applyTags(t, info) {
   if (info.title) t.title = info.title;
   if (info.artist) t.artist = info.artist;
   if (info.album) t.album = info.album;
+  t.genre = info.genre || '';
   if (info.duration > 0 && !(t.duration > 1)) t.duration = info.duration;
   if (t === list[P.index]) renderNowPlaying();
+  homeDirty();
 }
+setTagSink((key, info) => {
+  for (const p of pls) for (const t of p.tracks) if (t.key === key) { if (!t.tagged || t.genre == null) { applyTagsAll(key, info); saveList(); } return; }
+});
 const tagMemo = new Map();
 function tagInfo(t) {
   if (!tagMemo.has(t.key)) {
@@ -399,7 +457,7 @@ async function getArt(t) {
   let url = null;
   try {
     const info = await tagInfo(t);
-    if (info && !t.tagged) { applyTags(t, info); scheduleRows(); saveList(); }
+    if (info && (!t.tagged || t.genre == null)) { applyTagsAll(t.key, info); scheduleRows(); saveList(); }
     if (info && info.picture) url = URL.createObjectURL(new Blob([info.picture.data], { type: info.picture.mime }));
   } catch (e) { /* no art */ }
   artCache.set(t.key, url);
@@ -409,11 +467,13 @@ async function getArt(t) {
 let artTok = 0;
 async function loadArt(t) {
   const img = $('artImg'), tok = ++artTok;
-  if (!t) { img.hidden = true; P.artUrl = null; return; }
+  if (!t) { img.hidden = true; P.artUrl = null; renderPlayerArt(); setAmbient(null); return; }
   const url = await getArt(t);
   if (tok !== artTok) return;
   P.artUrl = url;
   if (url) { img.src = url; img.hidden = false; } else img.hidden = true;
+  renderPlayerArt();
+  thumb(t.key).then(v => { if (tok === artTok) setAmbient(v && v.color); });
   updateMediaSession();
   pushNowPlaying(true);
 }
@@ -462,8 +522,8 @@ platform.onCommand((c, a) => {
 });
 platform.onOpenFiles(items => addItems(items, { play: true }));
 
-/* ======================= 화면: 재생 영역 ======================= */
-const seek = $('seek'), vol = $('vol');
+/* ======================= 화면: 재생 막대 (PC) · 미니 플레이어 (휴대폰) ======================= */
+const seek = $('seek'), vol = $('vol'), pSeek = $('pSeek'), scroller = $('scroller');
 function paintRange(r, center) {
   const min = +r.min, max = +r.max, p = (r.value - min) / (max - min) * 100;
   const c = center != null ? (center - min) / (max - min) * 100 : 0;
@@ -471,67 +531,110 @@ function paintRange(r, center) {
 }
 function renderNowPlaying() {
   const t = list[P.index];
-  $('title').textContent = t ? displayTitle(t) : (list.length ? '재생할 곡을 고르세요' : '재생할 음악을 추가하세요');
-  $('sub').textContent = t ? subLine(t) : (list.length ? `${list.length}곡이 준비되어 있어요` : '파일이나 폴더를 열거나, 창에 끌어다 놓으세요');
+  const title = t ? displayTitle(t) : (list.length ? '재생할 곡을 고르세요' : '재생할 음악을 추가하세요');
+  const sub = t ? subLine(t) : (list.length ? `${list.length}곡이 준비되어 있어요` : platform.name === 'electron' ? '파일이나 폴더를 열거나, 창에 끌어다 놓으세요' : '파일이나 폴더를 열어 주세요');
+  $('title').textContent = title; $('sub').textContent = sub;
+  $('pTitle').textContent = title; $('pSub').textContent = t ? subLine(t) : '';
+  $('pFrom').replaceChildren(el('small', {}, '재생 중인 목록'), el('b', {}, playPl ? playPl.name : ''));
   document.title = t ? `${displayTitle(t)} — 울림` : '울림';
   updateSleepBadge();
 }
 function onTrackChange() {
   renderNowPlaying();
   renderPlHead();
-  updateTimeUI();
+  updateTimeUI(true);
   scheduleRows();
   scrollToCurrent();
   loadArt(list[P.index]);
   updateMediaSession();
   loadLyrics(list[P.index]);
+  P.noted = null;
+  markPlaying();
+  if (PL.open && PL.tab === 'queue') renderQueue();
 }
 function onPlayState() {
   const playing = isPlaying();
-  setIcon($('btnPlay'), playing ? 'pause' : 'play');
-  $('btnPlay').setAttribute('aria-label', playing ? '일시정지' : '재생');
-  updateMediaSession(); pushNowPlaying(); scheduleRows();
+  for (const id of ['btnPlay', 'pPlay']) { setIcon($(id), playing ? 'pause' : 'play'); $(id).setAttribute('aria-label', playing ? '일시정지' : '재생'); }
+  document.body.classList.toggle('playing', playing);
+  const qn = PL.open && document.querySelector('#pQueue .qrow.cur .nowp');
+  if (qn) qn.replaceChildren(icon(playing ? 'vol' : 'pause'));
+  updateMediaSession(); pushNowPlaying(); scheduleRows(); markPlaying();
   if (playing) startViz();
 }
-function updateTimeUI() {
+let progAt = 0;
+const setText = (n, v) => { if (n.textContent !== v) n.textContent = v; };
+function updateTimeUI(force) {
   const a = engine.deck.a, t = list[P.index];
   const d = isFinite(a.duration) && a.duration > 0 ? a.duration : (t ? t.duration : 0);
-  const cur = P.index >= 0 ? a.currentTime || 0 : 0;
-  if (!P.dragging) { seek.value = d ? Math.round(cur / d * 1000) : 0; paintRange(seek); $('cur').textContent = fmtTime(cur); }
-  $('dur').textContent = fmtTime(d);
+  const cur = P.index >= 0 ? a.currentTime || 0 : 0, frac = d ? clamp(cur / d, 0, 1) : 0;
+  const now = performance.now();
+  // 유리 막대 안의 것이 바뀔 때마다 유리(흐림 · 굴절)를 다시 그려야 하니 자주 바꾸지 않음: 진행 막대 1초에 4번, 시간 글자는 초가 바뀔 때만
+  if (!narrow() && (force || P.dragging || now - P.seekAt > 250)) {
+    P.seekAt = now;
+    if (!P.dragging) { const v = Math.round(frac * 1000); if (+seek.value !== v) { seek.value = v; paintRange(seek); } setText($('cur'), fmtTime(cur)); }
+    setText($('dur'), fmtTime(d));
+  }
+  if (force || now - progAt > 500) { progAt = now; $('pprogFill').style.transform = `scaleX(${frac})`; }
+  if (PL.open && !P.pDragging) { pSeek.value = Math.round(frac * 1000); paintRange(pSeek); setText($('pCur'), fmtTime(cur)); setText($('pDur'), fmtTime(d)); }
   if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && d && isPlaying() && Math.random() < 0.05) {
     try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(cur, d), playbackRate: a.playbackRate || 1 }); } catch (e) { /* noop */ }
   }
 }
+function toggleShuffle() { S.shuffle = !S.shuffle; order = []; saveSettings(); renderModes(); toast(S.shuffle ? '무작위 재생을 켰어요' : '무작위 재생을 껐어요'); if (PL.open && PL.tab === 'queue') renderQueue(); }
+function cycleRepeat() {
+  S.repeat = { off: 'all', all: 'one', one: 'off' }[S.repeat] || 'all'; saveSettings(); renderModes();
+  toast({ off: '반복 안 함', all: '전체 반복', one: '한 곡 반복' }[S.repeat]);
+}
+function bindSeek(r, dragKey, curId) {
+  r.addEventListener('input', () => {
+    P[dragKey] = true; paintRange(r);
+    const a = engine.deck.a, d = isFinite(a.duration) ? a.duration : 0;
+    $(curId).textContent = fmtTime(r.value / 1000 * d);
+  });
+  r.addEventListener('change', () => {
+    const a = engine.deck.a, d = isFinite(a.duration) ? a.duration : 0;
+    P[dragKey] = false;
+    if (d) seekTo(r.value / 1000 * d);
+  });
+}
 function renderTransport() {
-  setIcon($('btnPlay'), 'play'); setIcon($('btnPrev'), 'prev'); setIcon($('btnNext'), 'next'); setIcon($('btnShuffle'), 'shuffle');
-  $('btnPlay').onclick = togglePlay; $('btnPrev').onclick = prev; $('btnNext').onclick = next;
-  $('btnShuffle').onclick = () => { S.shuffle = !S.shuffle; order = []; saveSettings(); renderModes(); toast(S.shuffle ? '무작위 재생을 켰어요' : '무작위 재생을 껐어요'); };
-  $('btnRepeat').onclick = () => {
-    S.repeat = { off: 'all', all: 'one', one: 'off' }[S.repeat] || 'all'; saveSettings(); renderModes();
-    toast({ off: '반복 안 함', all: '전체 반복', one: '한 곡 반복' }[S.repeat]);
-  };
+  for (const [id, ic] of [['btnPlay', 'play'], ['btnPrev', 'prev'], ['btnNext', 'next'], ['btnShuffle', 'shuffle'], ['pPlay', 'play'], ['pPrev', 'prev'], ['pNext', 'next'], ['pShuffle', 'shuffle'],
+    ['btnLyr', 'lyrics'], ['btnExpand', 'up'], ['pClose', 'chevDown'], ['pMore', 'more'], ['btnBack', 'back'], ['btnAdd', 'plus'], ['btnFind', 'search'], ['sideNew', 'plus']]) setIcon($(id), ic);
+  $('btnPlay').onclick = $('pPlay').onclick = togglePlay;
+  $('btnPrev').onclick = $('pPrev').onclick = prev;
+  $('btnNext').onclick = $('pNext').onclick = next;
+  $('btnShuffle').onclick = $('pShuffle').onclick = toggleShuffle;
+  $('btnRepeat').onclick = $('pRepeat').onclick = cycleRepeat;
   $('btnMute').onclick = () => { S.muted = !S.muted; engine.setVolume(S.volume, S.muted); saveSettings(); renderVolume(); };
   vol.oninput = () => { S.volume = vol.value / 100; S.muted = false; engine.setVolume(S.volume, false); saveSettings(); renderVolume(); };
-  seek.addEventListener('input', () => {
-    P.dragging = true; paintRange(seek);
-    const a = engine.deck.a, d = isFinite(a.duration) ? a.duration : 0;
-    $('cur').textContent = fmtTime(seek.value / 1000 * d);
-  });
-  seek.addEventListener('change', () => {
-    const a = engine.deck.a, d = isFinite(a.duration) ? a.duration : 0;
-    P.dragging = false;
-    if (d) seekTo(seek.value / 1000 * d);
-  });
+  bindSeek(seek, 'dragging', 'cur'); bindSeek(pSeek, 'pDragging', 'pCur');
+  $('pinfo').onclick = () => (narrow() ? openPlayer() : togglePlayer());
+  $('btnExpand').onclick = togglePlayer;
+  $('btnLyr').onclick = () => {
+    if (NAV.view === 'lyr' && !PL.open) { const b = NAV.beforeLyr || 'home'; go(b, { push: false }); return; }
+    if (PL.open) closePlayer();
+    if (NAV.view !== 'lyr') NAV.beforeLyr = NAV.view;
+    go('lyr');
+  };
+  $('pClose').onclick = closePlayer;
+  $('pFrom').onclick = () => { if (playPl) { closePlayer(); showPlaylist(playPl); } };
+  $('pMore').onclick = e => playerMenu(rectOf(e.currentTarget));
+  document.querySelectorAll('[data-ptab]').forEach(b => b.addEventListener('click', () => setPlayerTab(PL.tab === b.dataset.ptab && narrow() ? null : b.dataset.ptab)));
+  document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
+  $('btnBack').onclick = () => back();
+  $('btnAdd').onclick = e => addMenu(rectOf(e.currentTarget), target(), { create: NAV.view !== 'list' });
+  $('btnFind').onclick = () => toggleSearch();
+  $('sideNew').onclick = () => createPlaylist();
+  $('searchInput').addEventListener('input', debounce(e => { query = e.target.value; refreshView(); scroller.scrollTop = Math.min(scroller.scrollTop, Math.max(0, listTop - 120)); }, 120));
   renderModes(); renderVolume();
 }
 function renderModes() {
-  const sh = $('btnShuffle'), rp = $('btnRepeat');
-  sh.classList.toggle('on', S.shuffle); sh.setAttribute('aria-pressed', S.shuffle);
-  setIcon(rp, S.repeat === 'one' ? 'repeatOne' : 'repeat');
-  rp.classList.toggle('on', S.repeat !== 'off');
+  for (const id of ['btnShuffle', 'pShuffle']) { const b = $(id); b.classList.toggle('on', S.shuffle); b.setAttribute('aria-pressed', S.shuffle); }
   const label = { off: '반복 안 함', all: '전체 반복', one: '한 곡 반복' }[S.repeat];
-  rp.title = label; rp.setAttribute('aria-label', label);
+  for (const id of ['btnRepeat', 'pRepeat']) {
+    const rp = $(id); setIcon(rp, S.repeat === 'one' ? 'repeatOne' : 'repeat');
+    rp.classList.toggle('on', S.repeat !== 'off'); rp.title = label; rp.setAttribute('aria-label', label);
+  }
 }
 function renderVolume() {
   vol.value = Math.round(S.volume * 100); paintRange(vol);
@@ -539,10 +642,302 @@ function renderVolume() {
   const sv = $('setVol'); if (sv) { sv.value = vol.value; paintRange(sv); sv.nextSibling.textContent = Math.round(S.volume * 100) + '%'; }
 }
 
-/* ======================= 화면: 재생목록 (가상 스크롤) ======================= */
-const ROW_H = 52;
+/* ======================= 앨범아트 작은 그림 =======================
+   목록 줄 · 홈 타일 · 재생 화면에 쓰는 160px 그림 (thumbs.js 가 만들고 저장).
+   화면에 보일 때만 부탁하고(IntersectionObserver), 이미 아는 그림은 바로 넣는다 */
+setThumbSource(key => platform.tagSource(key));
+const artIO = 'IntersectionObserver' in window ? new IntersectionObserver(es => {
+  for (const e of es) {
+    if (!e.isIntersecting) continue;
+    artIO.unobserve(e.target);
+    const f = e.target.__art; e.target.__art = null;
+    if (f) f();
+  }
+}, { rootMargin: '240px' }) : null;
+function whenVisible(node, fn) { if (!artIO) { fn(); return; } node.__art = fn; artIO.observe(node); }
+/** 곡 하나의 작은 그림. lazy: 화면에 보일 때 만들기 (긴 홈 화면) */
+function thumbEl(key, { lazy = false, extra = null, cancelable = false } = {}) {
+  const v = peek(key), img = el('img', { alt: '', hidden: !(v && v.url) });
+  if (v && v.url) img.src = v.url;
+  const box = el('span', { class: 'th', 'data-k': key }, icon('note'), img, extra);
+  if (v === undefined) {
+    const ask = () => thumb(key, { cancelable }).then(r => { if (r && r.url) fillThumbs(key, r.url); });
+    if (lazy) whenVisible(box, ask); else ask();
+  }
+  return box;
+}
+function fillThumbs(key, url) {
+  for (const b of document.querySelectorAll('.th[data-k]')) {
+    if (b.dataset.k !== key) continue;
+    const im = b.querySelector('img');
+    if (im && im.hidden) { im.src = url; im.hidden = false; }
+  }
+}
+/** 플레이리스트 그림: 서로 다른 앨범의 그림 4개 (모자라면 1개, 없으면 이름으로 정한 색) */
+function mosaic(tracks, seed, cls = '') {
+  const box = el('span', { class: 'mosaic ' + cls }, el('span', { class: 'fb', style: fallbackStyle(seed) }, icon('note')));
+  const keys = [], albums = new Set(), rest = [];
+  for (const t of tracks.slice(0, 40)) {
+    const al = (t.album || '').trim().toLowerCase() || t.key;
+    if (!albums.has(al)) { albums.add(al); keys.push(t.key); } else rest.push(t.key);
+    if (keys.length >= 6) break;
+  }
+  for (const k of rest) { if (keys.length >= 6) break; if (!keys.includes(k)) keys.push(k); }
+  if (!keys.length) return box;
+  const urls = [];
+  let known = true;
+  for (const k of keys) { const v = peek(k); if (v === undefined) { known = false; break; } if (v && v.url) urls.push(v.url); if (urls.length >= 4) break; }
+  if (known || urls.length >= 4) putMosaic(box, urls);
+  else whenVisible(box, () => fillMosaic(box, keys));
+  return box;
+}
+function putMosaic(box, urls) {
+  if (!urls.length) return;
+  const use = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
+  box.append(el('span', { class: 'mz n' + use.length }, ...use.map(u => el('img', { src: u, alt: '' }))));
+}
+async function fillMosaic(box, keys) {
+  const urls = [];
+  for (const k of keys) {
+    const known = peek(k), v = known !== undefined ? known : await thumb(k);
+    if (v === undefined) break;                        // 화면에서 사라져 만들지 않기로 함
+    if (v && v.url) urls.push(v.url);
+    if (urls.length >= 4) break;
+  }
+  if (box.isConnected && !box.querySelector('.mz')) putMosaic(box, urls);
+}
+/** 재생 화면 · 배경 색: 지금 곡 그림의 대표 색 */
+function setAmbient(color) { document.documentElement.style.setProperty('--amb', color || 'var(--accent)'); }
+
+/* ======================= 화면 이동 =======================
+   홈 · 음장 · EQ · 가사(PC) · 설정 = 메뉴로 가는 화면, list = 홈 등에서 들어가는 플레이리스트 화면 */
+const VIEWS = { home: 'viewHome', list: 'viewList', fx: 'viewFx', eq: 'viewEq', lyr: 'viewLyr', set: 'viewSet' };
+const TITLES = { home: '홈', fx: '음장 효과', eq: '이퀄라이저', lyr: '가사', set: '설정' };
+const NAV = { view: 'home', stack: [], scroll: {}, lastRoot: 'home' };
+const scrollKey = v => (v === 'list' ? 'list:' + shown.id : v);
+function go(viewName, { pl = null, push = true } = {}) {
+  let v = VIEWS[viewName] ? viewName : 'home';
+  if (v === 'lyr' && narrow()) { openPlayer('lyr'); return; }          // 휴대폰: 가사는 재생 화면에서
+  if (openMenuClose) openMenuClose();
+  if (PL.open) closePlayer();
+  const from = NAV.view;
+  NAV.scroll[scrollKey(from)] = scroller.scrollTop;
+  if (v === 'list') { if (push && from !== 'list') NAV.stack.push(from); }
+  else { NAV.stack = []; NAV.lastRoot = v; }
+  if (pl) setShown(pl);
+  if (EDIT.on && v !== 'list') exitEdit();
+  if (v !== 'list' && !$('searchBox').hidden) { query = ''; $('searchInput').value = ''; $('searchBox').hidden = true; }
+  NAV.view = v; app.dataset.view = v;
+  for (const [k, id] of Object.entries(VIEWS)) $(id).hidden = k !== v;
+  const navOn = v === 'list' ? (narrow() ? 'home' : '') : v;
+  document.querySelectorAll('[data-go]').forEach(b => { b.classList.toggle('on', b.dataset.go === navOn); b.setAttribute('aria-current', b.dataset.go === navOn ? 'page' : 'false'); });
+  renderTopbar();
+  if (v === 'home') renderHome();
+  else if (v === 'list') refreshView();
+  else if (v === 'eq') requestAnimationFrame(drawCurve);
+  else if (v === 'set') renderSettings();
+  hostLyrics();
+  markSide();
+  scroller.scrollTop = NAV.scroll[scrollKey(v)] || 0;
+  if (v === 'list') { measureList(); renderRows(); }
+  onScroll();
+}
+function back() {
+  if (NAV.stack.length) { go(NAV.stack.pop(), { push: false }); return true; }
+  if (NAV.view !== 'home') { go('home'); return true; }
+  return false;
+}
+function renderTopbar() {
+  const v = NAV.view;
+  $('btnBack').hidden = v !== 'list';
+  $('brandM').hidden = v !== 'home';
+  $('tbTitle').textContent = v === 'list' ? shown.name : v === 'home' ? '' : TITLES[v];
+  $('btnAdd').hidden = $('btnFind').hidden = !(v === 'home' || v === 'list');
+}
+let heroBottom = 0;
+function onScroll() {
+  const y = scroller.scrollTop;
+  $('main').classList.toggle('scrolled', y > 6);
+  $('topbar').classList.toggle('titled', NAV.view !== 'home' && (NAV.view !== 'list' || y > heroBottom - 70));
+}
+scroller.addEventListener('scroll', () => { onScroll(); if (NAV.view === 'list') scheduleRows(false); }, { passive: true });
+
+/* ======================= 화면: 홈 =======================
+   플레이리스트 (2줄, 옆으로 밀어 더 보기) → 최근에 들은 곡 6곡 (더보기) → 장르별 곡 */
+const HOME = { sig: '', timer: 0, at: 0, touch: 0 };
+function homeDirty() {
+  if (!HOME.timer) HOME.timer = setTimeout(homeFlush, 700);
+}
+function homeFlush() {
+  HOME.timer = 0;
+  const now = Date.now();
+  // 사용자가 홈을 만지는 중이거나, 장르를 천천히 읽는 중이면 다시 그리기를 미룸 (진행 글자는 그 자리에서 바뀜)
+  if (NAV.view === 'home' && (now - HOME.touch < 1500 || (GENRE_Q.busy && now - HOME.at < 8000))) { HOME.timer = setTimeout(homeFlush, 1500); return; }
+  if (NAV.view === 'home') renderHome();
+  markSide(true);
+}
+['pointerdown', 'wheel', 'scroll', 'touchmove'].forEach(ev => $('viewHome').addEventListener(ev, () => { HOME.touch = Date.now(); }, { capture: true, passive: true }));
+scroller.addEventListener('scroll', () => { if (NAV.view === 'home') HOME.touch = Date.now(); }, { passive: true });
+function homeSig(lib, groups) {
+  const tk = t => t.key + '\u0001' + displayTitle(t) + '\u0001' + t.artist;
+  return [
+    pls.map(p => [p.id, p.name, p.tracks.length, ...p.tracks.slice(0, 8).map(t => t.key)].join('\u0002')).join('|'),
+    recent.slice(0, 6).map(r => { const t = lib.get(r.k); return t ? tk(t) : ''; }).join('|'),
+    groups.slice(0, 10).map(g => g.name + ':' + g.tracks.length + ':' + g.tracks.slice(0, 12).map(tk).join('\u0002')).join('|'),
+    lib.size, pendingGenres(lib) > 0,
+  ].join('#');
+}
+const pendingGenres = lib => { let n = 0; for (const t of lib.values()) if (t.genre == null) n++; return n; };
+function renderHome(force) {
+  const box = $('viewHome'), lib = library(), groups = genreGroups(lib);
+  const sig = homeSig(lib, groups);
+  if (!force && sig === HOME.sig && box.childElementCount) { markPlaying(); return; }
+  HOME.sig = sig; HOME.at = Date.now();
+  const keepX = new Map([...box.querySelectorAll('[data-x]')].map(n => [n.dataset.x, n.scrollLeft]));
+  if (!lib.size) { box.replaceChildren(homeEmpty(), ...(pls.length > 1 ? [shelfPlaylists()] : [])); return; }
+  const kids = [genreChips(groups, lib), shelfPlaylists()];
+  const rec = [];
+  for (const r of recent) { const t = lib.get(r.k); if (t) rec.push(t); if (rec.length >= 6) break; }
+  if (rec.length) kids.push(sectionRecent(rec));
+  kids.push(...sectionGenres(groups, lib));
+  box.replaceChildren(...kids);
+  for (const n of box.querySelectorAll('[data-x]')) { const x = keepX.get(n.dataset.x); if (x) n.scrollLeft = x; }
+  markPlaying();
+  backfillGenres(lib);
+}
+function shelf(title, body, { sub = '', more = null, arrows = false } = {}) {
+  const head = el('div', { class: 'shead' }, el('h2', {}, title, sub ? el('small', {}, sub) : null), el('span', { class: 'sp' }));
+  if (arrows) {
+    const by = dir => body.scrollBy({ left: dir * body.clientWidth * 0.92, behavior: 'smooth' });
+    head.append(el('button', { class: 'ib sm arrow', title: '이전', 'aria-label': '이전', onclick: () => by(-1) }, icon('chevLeft')),
+      el('button', { class: 'ib sm arrow', title: '다음', 'aria-label': '다음', onclick: () => by(1) }, icon('chev')));
+  }
+  if (more) head.append(el('button', { class: 'more', onclick: more[1] }, more[0]));
+  return el('section', { class: 'shelf' }, head, body);
+}
+function genreChips(groups, lib) {
+  const row = el('div', { class: 'gchips', 'data-x': 'chips' },
+    el('button', { class: 'gchip', onclick: () => showPlaylist(allSongsPl()) }, '모든 곡', el('small', {}, String(lib.size))));
+  for (const g of groups) row.append(el('button', { class: 'gchip', onclick: () => showPlaylist(genrePl(g.name)) }, g.name, el('small', {}, String(g.tracks.length))));
+  return row;
+}
+function shelfPlaylists() {
+  const grid = el('div', { class: 'pgrid', 'data-x': 'pls' });
+  for (const p of pls) grid.append(plTile(p));
+  grid.append(el('button', { class: 'ptile new', onclick: () => createPlaylist() },
+    el('span', { class: 'mosaic' }, el('span', { class: 'fb' }, icon('plus'))), el('span', { class: 'nm' }, '새 플레이리스트'), el('span', { class: 'ct' }, '만들기')));
+  return shelf('플레이리스트', grid, { more: ['관리', managePlaylists], arrows: true });
+}
+function plTile(p) {
+  const tile = el('div', { class: 'ptile', role: 'button', tabindex: '0', 'data-pl': p.id, title: p.name, onclick: () => showPlaylist(p),
+    onkeydown: e => { if (e.key === 'Enter') showPlaylist(p); } },
+  mosaic(p.tracks, p.name),
+  p.tracks.length ? el('button', { class: 'pplay', title: '재생', 'aria-label': `${p.name} 재생`, onclick: e => { e.stopPropagation(); playIn(p, S.shuffle ? -1 : 0); } }, icon('play')) : null,
+  el('span', { class: 'nm' }, p.name), el('span', { class: 'ct' }, `${p.tracks.length}곡`));
+  tile.addEventListener('contextmenu', e => { e.preventDefault(); plMenu(pointRect(e.clientX, e.clientY), p); });
+  return tile;
+}
+function sectionRecent(rec) {
+  const rows = el('div', { class: 'qgrid' });
+  rec.forEach((t, i) => rows.append(songRow(t, () => playIn(recentPl(), i, { exact: t.key }))));
+  return shelf('최근에 들은 곡', rows, { more: ['더보기 +', () => showPlaylist(recentPl())] });
+}
+function songRow(t, onPlay) {
+  const r = el('div', { class: 'srow2', role: 'button', tabindex: '0', 'data-song': t.key, title: t.name, onclick: onPlay, onkeydown: e => { if (e.key === 'Enter') onPlay(); } },
+    thumbEl(t.key, { lazy: true, extra: el('span', { class: 'nowp' }, icon('vol')) }),
+    el('span', { class: 'tx' }, el('span', { class: 't1' }, displayTitle(t)), el('span', { class: 't2' }, subLine(t))),
+    el('span', { class: 'd num' }, t.duration ? fmtTime(t.duration) : ''),
+    el('button', { class: 'x', title: '곡 메뉴', 'aria-label': '곡 메뉴', onclick: e => { e.stopPropagation(); songMenu(rectOf(e.currentTarget), t, onPlay); } }, icon('more')));
+  r.addEventListener('contextmenu', e => { e.preventDefault(); songMenu(pointRect(e.clientX, e.clientY), t, onPlay); });
+  return r;
+}
+function songCard(t, onPlay) {
+  const c = el('div', { class: 'scard', role: 'button', tabindex: '0', 'data-song': t.key, title: t.name, onclick: onPlay, onkeydown: e => { if (e.key === 'Enter') onPlay(); } },
+    thumbEl(t.key, { lazy: true, extra: el('span', { class: 'nowp' }, icon('vol')) }),
+    el('span', { class: 't1' }, displayTitle(t)), el('span', { class: 't2' }, t.artist || '알 수 없는 아티스트'));
+  c.addEventListener('contextmenu', e => { e.preventDefault(); songMenu(pointRect(e.clientX, e.clientY), t, onPlay); });
+  return c;
+}
+function sectionGenres(groups, lib) {
+  const out = [];
+  const pending = pendingGenres(lib);
+  const named = groups.filter(g => g.name !== '장르 없음');
+  if (!named.length) {
+    if (pending) out.push(el('div', { class: 'hint ghint' }, genreHint(lib.size, pending)));
+    return out;
+  }
+  for (const g of groups.slice(0, 10)) {
+    const row = el('div', { class: 'cards', 'data-x': 'g:' + g.name });
+    g.tracks.slice(0, 12).forEach((t, i) => row.append(songCard(t, () => playIn(genrePl(g.name), i, { exact: t.key }))));
+    out.push(shelf(g.name === '장르 없음' ? '장르 정보 없음' : g.name, row, { sub: `${g.tracks.length}곡`, more: ['모두 보기', () => showPlaylist(genrePl(g.name))], arrows: true }));
+  }
+  if (pending) out.push(el('div', { class: 'hint ghint' }, genreHint(lib.size, pending)));
+  return out;
+}
+const genreHint = (n, pending) => `장르 정보를 읽는 중이에요… (${n - pending}/${n})`;
+function homeEmpty() {
+  return el('div', { class: 'welcome' },
+    el('div', { class: 'big' }, icon('note')),
+    el('h2', {}, '울림에 오신 걸 환영해요'),
+    el('p', {}, '음악 파일이나 폴더를 추가하면 여기에 플레이리스트, 최근에 들은 곡, 장르별 곡이 나와요.'),
+    el('div', { class: 'tools' }, ...toolButtons(target())));
+}
+/** 홈 · 왼쪽 목록에서 '재생 중' 표시만 바꾸기 (다시 그리지 않음) */
+function markPlaying() {
+  const t = list[P.index], curKey = t ? t.key : null, plId = t && playPl ? playPl.id : null;
+  for (const n of document.querySelectorAll('[data-pl]')) n.classList.toggle('playing', n.dataset.pl === plId);
+  for (const n of document.querySelectorAll('[data-song]')) n.classList.toggle('cur', n.dataset.song === curKey);
+}
+/* 1.1.x 에서 옮겨 온 곡은 장르를 아직 모름 → 쉬는 시간에 한 곡씩 읽기 (화면이 켜져 있을 때만) */
+const GENRE_Q = { busy: false, done: new Set() };
+function backfillGenres(lib = library()) {
+  if (GENRE_Q.busy || document.hidden || isSaving()) return;     // 배터리 절약 중에는 미룸
+  let t = null;
+  const queued = new Set(metaQ.map(x => x.key));
+  for (const x of lib.values()) if (x.genre == null && !GENRE_Q.done.has(x.key) && !queued.has(x.key)) { t = x; break; }
+  if (!t) return;
+  GENRE_Q.busy = true; GENRE_Q.done.add(t.key);
+  const idle = fn => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 1500 }) : setTimeout(fn, 60));
+  idle(() => readTags(platform.tagSource(t.key)).then(info => applyTagsAll(t.key, info)).catch(() => applyTagsAll(t.key, { genre: '' }))
+    .finally(() => {
+      GENRE_Q.busy = false; saveList();
+      const h = document.querySelector('#viewHome .ghint'), l2 = library(), pend = pendingGenres(l2);
+      if (h) h.textContent = pend ? genreHint(l2.size, pend) : '';
+      setTimeout(() => backfillGenres(), 40);
+    }));
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) backfillGenres(); });
+/** 같은 파일을 가리키는 모든 곡에 태그 넣기 (여러 플레이리스트 · 재생 중인 가상 목록) */
+function applyTagsAll(key, info) {
+  const seen = new Set();
+  for (const p of [...pls, playPl, shown]) {
+    if (!p || seen.has(p)) continue; seen.add(p);
+    for (const t of p.tracks) if (t.key === key) { if (info.title || info.artist || info.genre != null) applyTags(t, info, true); }
+  }
+  homeDirty();
+}
+function playIn(pl, i = 0, { shuffle = null, exact = null } = {}) {
+  if (!pl || !pl.tracks.length) return;
+  if (shuffle != null && shuffle !== S.shuffle) { S.shuffle = shuffle; saveSettings(); renderModes(); }
+  playPl = pl; list = pl.tracks; order = []; P.index = -1;
+  if (!pl.virtual) P.lastReal = pl;
+  if (exact) { const j = list.findIndex(t => t.key === exact); if (j >= 0) i = j; }
+  if (i < 0) { if (S.shuffle) { rebuildOrder(); i = order[0]; } else i = 0; }
+  playIndex(clamp(i, 0, list.length - 1));
+  saveList();
+}
+
+/* ======================= 화면: 플레이리스트 (긴 목록은 보이는 줄만 그림) ======================= */
+const ROW_H = 56;
 const vlist = $('vlist'), spacer = $('spacer');
-let view = [], query = '';
+let view = [], query = '', listTop = 0, rowKeys = new Set();
+/** 목록 첫 줄이 스크롤 안에서 어디에 있는지 (줄 위치 계산용) */
+const offsetIn = node => { let y = 0, n = node; while (n && n !== scroller) { y += n.offsetTop; n = n.offsetParent; } return y; };
+function measureList() {
+  listTop = offsetIn(vlist);
+  const hero = $('plHero');
+  heroBottom = offsetIn(hero) + hero.offsetHeight;
+}
 function refreshView() {
   const L = shown.tracks, q = query.trim().toLowerCase();
   view = [];
@@ -555,46 +950,57 @@ function refreshView() {
   $('empty').hidden = !empty; vlist.hidden = empty;
   if (empty) { renderEmpty(); spacer.replaceChildren(); }
   if (EDIT.on) renderEditBar();
+  renderHero();
   renderPlHead();
-  renderRows();
-  updateCount();
+  if (NAV.view === 'list') { measureList(); renderRows(); }
   renderNowPlaying();
 }
 function updateCount() {
+  const m = $('plMeta'); if (!m) return;
   const L = shown.tracks, total = L.reduce((s, t) => s + (t.duration || 0), 0);
-  $('listCount').textContent = L.length ? `${L.length}곡 · ${fmtLong(total)}` : '';
+  m.textContent = L.length ? `${L.length}곡 · ${fmtLong(total)}` + (query.trim() ? ` · 검색 결과 ${view.length}곡` : '') : '곡이 없어요';
 }
 const fmtLong = s => { const h = Math.floor(s / 3600), m = Math.round(s / 60) % 60; return h ? `${h}시간 ${m}분` : `${Math.max(m, s > 0 ? 1 : 0)}분`; };
-let rowsQueued = false;
-function scheduleRows() { if (rowsQueued) return; rowsQueued = true; requestAnimationFrame(() => { rowsQueued = false; renderRows(); updateCount(); }); }
+let rowsQueued = false, countQueued = false;
+function scheduleRows(count = true) {
+  if (count) countQueued = true;
+  if (rowsQueued) return;
+  rowsQueued = true;
+  requestAnimationFrame(() => { rowsQueued = false; renderRows(); if (countQueued) { countQueued = false; updateCount(); } });
+}
 function renderRows() {
-  if (vlist.hidden) return;
-  const L = shown.tracks, here = shown === playPl;
-  const top = vlist.scrollTop, h = vlist.clientHeight || 600;
-  const first = Math.max(0, Math.floor(top / ROW_H) - 5), last = Math.min(view.length, Math.ceil((top + h) / ROW_H) + 5);
-  const frag = document.createDocumentFragment(), playing = isPlaying();
+  if (NAV.view !== 'list' || vlist.hidden) return;
+  const L = shown.tracks, st = scroller.scrollTop - listTop, h = scroller.clientHeight || 800;
+  const first = Math.max(0, Math.floor(st / ROW_H) - 6), last = Math.min(view.length, Math.ceil((st + h) / ROW_H) + 6);
+  const frag = document.createDocumentFragment(), playing = isPlaying(), cur = list[P.index], curKey = cur ? cur.key : null;
+  const keys = new Set();
   for (let k = first; k < last; k++) {
     const i = view[k], t = L[i];
     if (!t) continue;
-    const isCur = here && i === P.index, sel = EDIT.on && EDIT.sel.has(t);
-    frag.append(el('div', { class: 'row' + (isCur ? ' cur' : '') + (t.bad ? ' bad' : '') + (sel ? ' sel' : '') + (DRAG && DRAG.from === i ? ' dragging' : ''), style: `top:${k * ROW_H + 4}px`, 'data-i': i, title: t.name },
-      EDIT.on ? el('div', { class: 'no ck', role: 'checkbox', 'aria-checked': sel ? 'true' : 'false' }, el('span', { class: 'box' }, sel ? icon('check') : null))
-        : el('div', { class: 'no num' }, isCur && playing ? icon('vol') : String(i + 1)),
+    keys.add(t.key);
+    const isCur = t.key === curKey, sel = EDIT.on && EDIT.sel.has(t);
+    frag.append(el('div', { class: 'row' + (isCur ? ' cur' : '') + (isCur && playing ? ' on' : '') + (t.bad ? ' bad' : '') + (sel ? ' sel' : '') + (DRAG && DRAG.from === i ? ' dragging' : ''), style: `top:${k * ROW_H}px`, 'data-i': i, title: t.name },
+      EDIT.on ? el('div', { class: 'ck', role: 'checkbox', 'aria-checked': sel ? 'true' : 'false' }, el('span', { class: 'box' }, sel ? icon('check') : null)) : null,
+      thumbEl(t.key, { cancelable: true, extra: isCur ? el('span', { class: 'nowp' }, icon(playing ? 'vol' : 'pause')) : null }),
       el('div', { class: 'tx' }, el('div', { class: 't1' }, displayTitle(t)), el('div', { class: 't2' }, subLine(t))),
       el('div', { class: 'd num' }, t.duration ? fmtTime(t.duration) : ''),
       EDIT.on ? el('div', { class: 'grip', title: '끌어서 순서 바꾸기', 'aria-label': '끌어서 순서 바꾸기' }, icon('grip'))
         : el('button', { class: 'x', title: '곡 메뉴', 'aria-label': '곡 메뉴', 'data-act': 'more' }, icon('more'))));
   }
   spacer.replaceChildren(frag);
+  const gone = [];
+  for (const k of rowKeys) if (!keys.has(k)) gone.push(k);
+  if (gone.length) forgetPending(gone);              // 빨리 넘겨 지나간 줄의 그림은 만들지 않음
+  rowKeys = keys;
 }
 function scrollToCurrent() {
-  if (shown !== playPl) return;
-  const k = view.indexOf(P.index);
+  if (NAV.view !== 'list' || !(shown === playPl || (shown.virtual && playPl.virtual && shown.id === playPl.id))) return;
+  const cur = list[P.index]; if (!cur) return;
+  const k = view.findIndex(i => shown.tracks[i] && shown.tracks[i].key === cur.key);
   if (k < 0 || vlist.hidden) return;
-  const y = k * ROW_H, top = vlist.scrollTop, h = vlist.clientHeight;
-  if (y < top || y + ROW_H > top + h) vlist.scrollTop = Math.max(0, y - h / 2 + ROW_H / 2);
+  const y = listTop + k * ROW_H, top = scroller.scrollTop, h = scroller.clientHeight - 200;
+  if (y < top + 60 || y + ROW_H > top + h) scroller.scrollTop = Math.max(0, y - h / 2);
 }
-vlist.addEventListener('scroll', scheduleRows, { passive: true });
 spacer.addEventListener('click', e => {
   const r = e.target.closest('.row'); if (!r) return;
   const i = +r.dataset.i;
@@ -609,35 +1015,44 @@ spacer.addEventListener('contextmenu', e => {
   e.preventDefault();
   trackMenu(pointRect(e.clientX, e.clientY), +r.dataset.i);
 });
-new ResizeObserver(scheduleRows).observe(vlist);
+new ResizeObserver(() => { if (NAV.view === 'list') { measureList(); scheduleRows(); } }).observe(scroller);
 
 /** 화면의 플레이리스트에서 i 번째 곡 재생 (재생 목록이 다르면 이 플레이리스트로 옮겨 감) */
 function playFromShown(i) { adoptShown(); playIndex(i); }
 function adoptShown() {
   if (shown === playPl) return;
   playPl = shown; list = shown.tracks; order = []; P.index = -1;
+  if (!shown.virtual) P.lastReal = shown;
   saveList();
 }
-
-function addItems(items, { play: playNow = false } = {}) {
+/** 음악을 넣을 플레이리스트: 보고 있는 플레이리스트, 아니면 마지막으로 본 · 재생한 플레이리스트 */
+function target() {
+  if (NAV.view === 'list' && !shown.virtual) return shown;
+  return P.lastReal && pls.includes(P.lastReal) ? P.lastReal : pls[0];
+}
+function addItems(items, { play: playNow = false, to = null, open = false } = {}) {
   if (!items || !items.length) return;
-  const L = shown.tracks;
+  const pl = to && pls.includes(to) ? to : target();
+  const L = pl.tracks;
   const have = new Set(L.map(t => t.key)), add = [];
   for (const it of items) { if (!it || !it.key || have.has(it.key)) continue; have.add(it.key); add.push(mkTrack(it)); }
   if (!add.length) {
-    toast('이미 목록에 있는 곡이에요');
-    if (playNow) { const i = L.findIndex(t => t.key === items[0].key); if (i >= 0) playFromShown(i); }
+    toast(`'${pl.name}'에 이미 있는 곡이에요`);
+    if (playNow) { const i = L.findIndex(t => t.key === items[0].key); if (i >= 0) playIn(pl, i); }
     return;
   }
   const start = L.length, wasEmpty = start === 0;
-  L.push(...add); if (shown === playPl) order = [];
-  refreshView(); saveList(); queueMeta(add);
-  toast(`${add.length}곡을 추가했어요`);
-  if (playNow || (wasEmpty && P.index < 0 && !isPlaying())) playFromShown(start);
+  L.push(...add); if (pl === playPl) order = [];
+  if (pl === shown) refreshView();
+  saveList(); queueMeta(add);
+  toast(`'${pl.name}'에 ${add.length}곡을 추가했어요`);
+  if (open && !(NAV.view === 'list' && shown === pl)) showPlaylist(pl);
+  if (playNow || (wasEmpty && P.index < 0 && !isPlaying())) playIn(pl, start);
 }
 /** 화면의 플레이리스트에서 곡 빼기 (번호 여러 개) */
 function removeTracks(idxs) {
   if (DRAG) DRAG.cancel();
+  if (shown.virtual) return;
   const L = shown.tracks, here = shown === playPl;
   const set = new Set(idxs.filter(i => i >= 0 && i < L.length));
   if (!set.size) return;
@@ -664,13 +1079,14 @@ function removeTracks(idxs) {
 function removeTrack(i) { removeTracks([i]); }
 async function clearList() {
   const L = shown.tracks;
-  if (!L.length) return;
+  if (!L.length || shown.virtual) return;
   const ok = await dialog({ title: `'${shown.name}'을(를) 비울까요?`, text: `${L.length}곡이 목록에서 빠져요. 음악 파일은 지워지지 않아요.`, okText: '비우기' });
   if (!ok) return;
   removeTracks(L.map((_, i) => i));
 }
 function sortList(kind) {
   if (DRAG) DRAG.cancel();
+  if (shown.virtual) return;
   const L = shown.tracks, here = shown === playPl, cur = here ? L[P.index] : null;
   const key = t => kind === 'artist' ? `${t.artist}\u0000${t.album}\u0000${displayTitle(t)}` : kind === 'name' ? t.name : displayTitle(t);
   if (kind === 'random') { for (let i = L.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [L[i], L[j]] = [L[j], L[i]]; } }
@@ -681,83 +1097,133 @@ function sortList(kind) {
 /** 화면의 플레이리스트 안에서 from 번째 곡을 to 자리로 */
 function moveTrack(from, to) {
   const L = shown.tracks;
-  if (from === to || from < 0 || from >= L.length || to < 0 || to >= L.length) return;
+  if (shown.virtual || from === to || from < 0 || from >= L.length || to < 0 || to >= L.length) return;
   const here = shown === playPl, cur = here ? L[P.index] : null;
   const [t] = L.splice(from, 1); L.splice(to, 0, t);
   if (here) { P.index = cur ? L.indexOf(cur) : -1; order = []; }
   refreshView(); saveList();
 }
 
-async function pickFiles() { try { addItems(await platform.pickFiles(), {}); } catch (e) { toast(errMsg(e, '파일을 열지 못했어요')); } }
-async function pickFolder() {
-  try { const items = await platform.pickFolder(); if (items && !items.length) toast('폴더에서 음악 파일을 찾지 못했어요'); addItems(items); }
+async function pickFiles(to = null) { try { addItems(await platform.pickFiles(), { to, open: true }); } catch (e) { toast(errMsg(e, '파일을 열지 못했어요')); } }
+async function pickFolder(to = null) {
+  try { const items = await platform.pickFolder(); if (items && !items.length) toast('폴더에서 음악 파일을 찾지 못했어요'); addItems(items, { to, open: true }); }
   catch (e) { toast(errMsg(e, '폴더를 열지 못했어요')); }
 }
-async function scanLibrary() {
+async function scanLibrary(to = null) {
   toast('음악을 찾는 중이에요…');
-  try { const items = await platform.scanLibrary(); if (!items.length) toast('음악 파일을 찾지 못했어요'); else addItems(items); }
+  try { const items = await platform.scanLibrary(); if (!items.length) toast('음악 파일을 찾지 못했어요'); else addItems(items, { to, open: true }); }
   catch (e) { toast(errMsg(e, '음악을 불러오지 못했어요')); }
 }
 const errMsg = (e, d) => (e && e.message && /[가-힣]/.test(e.message)) ? e.message : d;
 
-function toolButtons() {
+function toolButtons(to = null) {
   return [
-    el('button', { class: 'btn', onclick: pickFiles }, icon('file'), '파일 추가'),
-    el('button', { class: 'btn', onclick: pickFolder }, icon('folder'), '폴더 추가'),
-    platform.canScan ? el('button', { class: 'btn', onclick: scanLibrary }, icon('note'), platform.scanLabel + ' 불러오기') : null,
-  ];
+    el('button', { class: 'btn', onclick: () => pickFiles(to) }, icon('file'), '파일 추가'),
+    el('button', { class: 'btn', onclick: () => pickFolder(to) }, icon('folder'), '폴더 추가'),
+    platform.canScan ? el('button', { class: 'btn', onclick: () => scanLibrary(to) }, icon('note'), platform.scanLabel + ' 불러오기') : null,
+  ].filter(Boolean);
 }
-function renderListTools() {
-  $('listTools').replaceChildren(...toolButtons().filter(Boolean));
-  setIcon($('btnSearch'), 'search'); setIcon($('btnListMenu'), 'more');
-  $('plChev').replaceChildren(icon('chev'));
-  $('plBtn').onclick = e => playlistMenu(rectOf(e.currentTarget));
-  $('btnSearch').onclick = () => {
-    if (EDIT.on) exitEdit();
-    const box = $('searchBox'); box.hidden = !box.hidden;
-    if (!box.hidden) $('searchInput').focus(); else { query = ''; $('searchInput').value = ''; refreshView(); }
-  };
-  $('searchInput').addEventListener('input', debounce(e => { query = e.target.value; refreshView(); vlist.scrollTop = 0; }, 120));
-  $('btnListMenu').onclick = e => {
-    const r = rectOf(e.currentTarget), has = shown.tracks.length > 0;
-    openMenu(r, [
-      has && ['check', '편집 (여러 곡 선택 · 순서 바꾸기)', enterEdit],
-      has && ['sort', '정렬…', () => openMenu(r, [
-        ['sort', '제목 순', () => sortList('title')],
-        ['sort', '아티스트 순', () => sortList('artist')],
-        ['sort', '파일 이름 순', () => sortList('name')],
-        ['shuffle', '무작위로 섞기', () => sortList('random')],
-      ])],
-      null,
-      ['edit', '이름 바꾸기', () => renamePlaylist(shown)],
-      ['copy', '복사해서 새 플레이리스트로', () => duplicatePlaylist(shown, { show: true })],
-      !!platform.savePlaylist && has && ['export', 'M3U 파일로 내보내기', () => exportPlaylist(shown)],
-      ['list', '플레이리스트 관리', managePlaylists],
-      null,
-      has && ['trash', '목록 비우기', clearList],
-      pls.length > 1 && ['trash', '이 플레이리스트 삭제', () => deletePlaylist(shown)],
-    ]);
-  };
+/** 음악 추가 메뉴 (위 막대의 + · 플레이리스트의 +) */
+function addMenu(anchor, to, { create = false } = {}) {
+  openMenu(anchor, [
+    ['file', '파일 추가', () => pickFiles(to), create ? `→ ${to.name}` : ''],
+    ['folder', '폴더 추가', () => pickFolder(to)],
+    platform.canScan && ['note', platform.scanLabel + ' 불러오기', () => scanLibrary(to)],
+    create && null,
+    create && ['plus', '새 플레이리스트 만들기', () => createPlaylist()],
+  ]);
+}
+function toggleSearch(open) {
+  if (NAV.view !== 'list') { showPlaylist(allSongsPl()); open = true; }
+  if (EDIT.on) exitEdit();
+  const box = $('searchBox');
+  const want = open != null ? open : box.hidden;
+  box.hidden = !want;
+  if (want) { $('searchInput').focus(); measureList(); scroller.scrollTop = Math.max(scroller.scrollTop, Math.max(0, listTop - 130)); }
+  else { query = ''; $('searchInput').value = ''; refreshView(); }
 }
 function renderEmpty() {
   $('empty').replaceChildren(
     el('div', { class: 'big' }, icon('note')),
-    el('b', {}, pls.length > 1 ? `'${shown.name}'이(가) 비어 있어요` : '재생목록이 비어 있어요'),
-    el('div', {}, platform.name === 'electron' ? '음악 파일이나 폴더를 추가하거나 창에 끌어다 놓으세요' : '음악 파일이나 폴더를 추가하세요'),
-    el('div', { class: 'tools' }, ...toolButtons()));
+    el('b', {}, shown.virtual ? '아직 곡이 없어요' : `'${shown.name}'이(가) 비어 있어요`),
+    shown.virtual ? el('div', {}, shown.kind === 'recent' ? '곡을 들으면 여기에 나와요' : '음악을 추가하면 여기에 나와요')
+      : el('div', {}, platform.name === 'electron' ? '음악 파일이나 폴더를 추가하거나 창에 끌어다 놓으세요' : '음악 파일이나 폴더를 추가하세요'),
+    shown.virtual ? null : el('div', { class: 'tools' }, ...toolButtons(shown)));
 }
 
-/* ======================= 플레이리스트 만들기 · 관리 ======================= */
+/* ======================= 플레이리스트 화면 머리 · 만들기 · 관리 ======================= */
 const rectOf = node => { const r = node.getBoundingClientRect(); return { getBoundingClientRect: () => r }; };
 const pointRect = (x, y) => ({ getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y, width: 0, height: 0 }) });
+function renderHero() {
+  const p = shown, L = p.tracks, box = $('plHero');
+  const sig = [p.id, p.name, p.virtual ? 'v' : '', L.length ? 1 : 0, ...L.slice(0, 8).map(t => t.key)].join('\u0001');
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
+    const kind = p.virtual ? (p.kind === 'genre' ? '장르' : KIND_LABEL[p.kind] || '목록') : '플레이리스트';
+    box.replaceChildren(
+      mosaic(L, p.name, 'big'),
+      el('div', { class: 'hinfo' },
+        el('div', { class: 'kind' }, kind),
+        el('h1', { class: 'hname' }, p.name),
+        el('div', { class: 'hmeta', id: 'plMeta' }),
+        el('div', { class: 'hacts' },
+          el('button', { class: 'btn primary pill', id: 'plPlay', disabled: !L.length, onclick: () => playIn(p, 0, { shuffle: false }) }, icon('play'), '재생'),
+          el('button', { class: 'btn pill', id: 'plShuffle', disabled: !L.length, onclick: () => playIn(p, -1, { shuffle: true }) }, icon('shuffle'), '셔플'),
+          p.virtual ? null : el('button', { class: 'ib', id: 'plAdd', title: '음악 추가', 'aria-label': '음악 추가', onclick: e => addMenu(rectOf(e.currentTarget), p) }, icon('plus')),
+          el('button', { class: 'ib', id: 'plMenu', title: '더보기', 'aria-label': '플레이리스트 메뉴', onclick: e => listMenu(rectOf(e.currentTarget)) }, icon('more')))));
+  }
+  updateCount();
+}
 function renderPlHead() {
-  $('plName').textContent = shown.name;
-  $('plBtn').title = `플레이리스트: ${shown.name} — 눌러서 바꾸기 · 새로 만들기`;
-  // 다른 플레이리스트를 보고 있으면 '어디서 재생 중인지' 한 줄로 알려 주고 바로 갈 수 있게
-  const away = shown !== playPl && P.index >= 0 && pls.includes(playPl);
+  if (NAV.view === 'list') $('tbTitle').textContent = shown.name;
+  // 다른 목록에서 재생 중이면 한 줄로 알려 주고 바로 갈 수 있게
+  const away = P.index >= 0 && shown !== playPl && !(shown.virtual && playPl.virtual && shown.id === playPl.id);
   const bar = $('plNow');
   bar.hidden = !away;
-  if (away) bar.replaceChildren(icon('vol'), el('span', {}, `'${playPl.name}'에서 재생 중`), el('button', { class: 'link', onclick: () => showPlaylist(playPl) }, '그 목록 보기'));
+  if (away) bar.replaceChildren(icon('vol'), el('span', {}, `'${playPl.name}'에서 재생 중`),
+    playPl.virtual && !playPl.kind ? null : el('button', { class: 'link', onclick: () => showPlaylist(playPl) }, '그 목록 보기'));
+}
+function listMenu(anchor) {
+  const p = shown, has = p.tracks.length > 0;
+  if (p.virtual) {
+    openMenu(anchor, [
+      has && ['listAdd', '새 플레이리스트로 저장', () => saveAsPlaylist(p)],
+      has && ['listAdd', '다른 플레이리스트에 모두 넣기…', () => addToPlaylistMenu(anchor, p.tracks)],
+      null,
+      ['list', '플레이리스트 관리', managePlaylists],
+    ]);
+    return;
+  }
+  openMenu(anchor, [
+    has && ['check', '편집 (여러 곡 선택 · 순서 바꾸기)', enterEdit],
+    has && ['sort', '정렬…', () => openMenu(anchor, [
+      ['sort', '제목 순', () => sortList('title')],
+      ['sort', '아티스트 순', () => sortList('artist')],
+      ['sort', '파일 이름 순', () => sortList('name')],
+      ['shuffle', '무작위로 섞기', () => sortList('random')],
+    ])],
+    has && ['search', '이 목록에서 찾기', () => toggleSearch(true)],
+    null,
+    ['edit', '이름 바꾸기', () => renamePlaylist(p)],
+    ['copy', '복사해서 새 플레이리스트로', () => duplicatePlaylist(p, { show: true })],
+    !!platform.savePlaylist && has && ['export', 'M3U 파일로 내보내기', () => exportPlaylist(p)],
+    ['list', '플레이리스트 관리', managePlaylists],
+    null,
+    has && ['trash', '목록 비우기', clearList],
+    pls.length > 1 && ['trash', '이 플레이리스트 삭제', () => deletePlaylist(p)],
+  ]);
+}
+/** 홈 타일 · 왼쪽 목록에서 오른쪽 클릭 */
+function plMenu(anchor, p) {
+  openMenu(anchor, [
+    p.tracks.length && ['play', '재생', () => playIn(p, 0, { shuffle: false })],
+    p.tracks.length && ['shuffle', '셔플 재생', () => playIn(p, -1, { shuffle: true })],
+    null,
+    ['edit', '이름 바꾸기', () => renamePlaylist(p)],
+    ['copy', '복사', () => duplicatePlaylist(p)],
+    !!platform.savePlaylist && p.tracks.length && ['export', 'M3U 파일로 내보내기', () => exportPlaylist(p)],
+    pls.length > 1 && ['trash', '삭제', () => deletePlaylist(p)],
+  ]);
 }
 function uniqueName(base, except = null) {
   base = String(base || '').replace(/\s+/g, ' ').trim().slice(0, 40) || '새 플레이리스트';
@@ -765,33 +1231,38 @@ function uniqueName(base, except = null) {
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
 }
-/** 화면에 보이는 플레이리스트 바꾸기 (재생 중인 곡은 그대로) */
+/** 플레이리스트 화면에 보일 목록 바꾸기 (재생 중인 곡은 그대로) */
+function setShown(pl) {
+  if (!pl || pl === shown) return;
+  if (EDIT.on) exitEdit();
+  shown = pl;
+  query = ''; $('searchInput').value = ''; $('searchBox').hidden = true;
+  if (!pl.virtual) P.lastReal = pl;
+  queueMeta(pl.tracks.filter(t => !t.tagged));
+  saveList();
+}
 function showPlaylist(pl) {
   if (!pl) return;
-  if (EDIT.on) exitEdit();
-  if (pl !== shown) {
-    shown = pl;
-    query = ''; $('searchInput').value = ''; $('searchBox').hidden = true;
-    vlist.scrollTop = 0;
-    queueMeta(pl.tracks.filter(t => !t.tagged));
-    saveList();
-  }
-  refreshView(); scrollToCurrent();
-  if (narrow() && S.tab !== 'list') setTab('list');
+  if (PL.open) closePlayer();
+  const same = NAV.view === 'list' && shown === pl;
+  go('list', { pl, push: NAV.view !== 'list' });
+  if (!same) { scroller.scrollTop = 0; onScroll(); scheduleRows(); }
+  scrollToCurrent();
 }
 async function createPlaylist({ show = true, name = null } = {}) {
   const n = name || await dialog({ title: '새 플레이리스트', text: '이름을 정해 주세요.', input: uniqueName('새 플레이리스트'), okText: '만들기', maxLength: 40 });
   if (!n) return null;
   const p = mkPl(uniqueName(n));
   pls.push(p); saveList();
-  if (show) { showPlaylist(p); toast(`'${p.name}'을(를) 만들었어요 — 파일을 추가하거나 다른 목록에서 곡을 옮겨 오세요`); }
+  if (show) { showPlaylist(p); toast(`'${p.name}'을(를) 만들었어요 — 음악을 추가하거나 다른 목록에서 곡을 넣어 보세요`); }
   return p;
 }
 async function renamePlaylist(p) {
   const n = await dialog({ title: '이름 바꾸기', input: p.name, okText: '바꾸기', maxLength: 40 });
   if (!n || n === p.name) return;
-  p.name = uniqueName(n, p); saveList(); renderPlHead(); if (MGR.render) MGR.render();
+  p.name = uniqueName(n, p); saveList(); if (p === shown) { renderHero(); renderPlHead(); renderTopbar(); } if (MGR.render) MGR.render();
   if (p === shown && !p.tracks.length) renderEmpty();
+  renderNowPlaying();
 }
 function duplicatePlaylist(p, { show = false } = {}) {
   const c = mkPl(uniqueName(`${p.name} 복사본`), p.tracks.map(t => mkTrack(t)));
@@ -800,12 +1271,21 @@ function duplicatePlaylist(p, { show = false } = {}) {
   if (show) showPlaylist(c); else if (MGR.render) MGR.render();
   return c;
 }
+/** 최근에 들은 곡 · 장르 · 모든 곡 → 진짜 플레이리스트로 */
+function saveAsPlaylist(v) {
+  const c = mkPl(uniqueName(v.name), v.tracks.map(t => mkTrack(t)));
+  pls.push(c); saveList();
+  toast(`'${c.name}' 플레이리스트로 저장했어요`);
+  showPlaylist(c);
+  return c;
+}
 async function deletePlaylist(p) {
   if (pls.length <= 1) { toast('플레이리스트는 하나 이상 있어야 해요. 대신 목록 비우기를 써 주세요'); return; }
   const ok = await dialog({ title: `'${p.name}'을(를) 지울까요?`, text: `${p.tracks.length}곡이 든 플레이리스트예요. 음악 파일은 지워지지 않아요.`, okText: '지우기' });
   if (!ok || !pls.includes(p)) return;
   const i = pls.indexOf(p);
   pls.splice(i, 1);
+  if (P.lastReal === p) P.lastReal = null;
   if (p === playPl) {          // 재생하던 목록이면 멈추고 다른 목록으로
     endCrossfade(); engine.unload(engine.deck); engine.unload(engine.other); P.index = -1;
     playPl = shown !== p ? shown : pls[Math.min(i, pls.length - 1)];
@@ -814,7 +1294,8 @@ async function deletePlaylist(p) {
   }
   p.tracks.forEach(t => { t.removed = true; });
   releaseUnused(p.tracks.map(t => t.key));
-  if (p === shown) { if (EDIT.on) exitEdit(); shown = null; showPlaylist(playPl); } else refreshView();
+  if (p === shown) { if (EDIT.on) exitEdit(); shown = pls[Math.min(i, pls.length - 1)]; if (NAV.view === 'list') back(); }
+  else if (NAV.view === 'list') refreshView();
   saveList(); if (MGR.render) MGR.render();
   toast(`'${p.name}'을(를) 지웠어요`);
 }
@@ -825,12 +1306,12 @@ function addTracksTo(pl, tracks) {
   for (const t of tracks) if (t && !t.removed && !have.has(t.key)) { have.add(t.key); add.push(mkTrack(t)); }
   if (!add.length) { toast(`'${pl.name}'에 이미 있는 곡이에요`); return 0; }
   pl.tracks.push(...add); if (pl === playPl) order = [];
-  saveList(); if (pl === shown) refreshView(); if (MGR.render) MGR.render();
+  saveList(); if (pl === shown && NAV.view === 'list') refreshView(); if (MGR.render) MGR.render();
   toast(`'${pl.name}'에 ${add.length}곡을 넣었어요`);
   return add.length;
 }
-function addToPlaylistMenu(anchor, tracks) {
-  const items = pls.filter(p => p !== shown).map(p => ['list', p.name, () => addTracksTo(p, tracks), `${p.tracks.length}곡`]);
+function addToPlaylistMenu(anchor, tracks, exclude = null) {
+  const items = pls.filter(p => p !== exclude).map(p => ['list', p.name, () => addTracksTo(p, tracks), `${p.tracks.length}곡`]);
   if (items.length) items.push(null);
   items.push(['plus', '새 플레이리스트 만들어 넣기', async () => { const p = await createPlaylist({ show: false }); if (p) addTracksTo(p, tracks); }]);
   openMenu(anchor, items);
@@ -839,15 +1320,17 @@ function trackMenu(anchor, i) {
   const t = shown.tracks[i]; if (!t) return;
   openMenu(anchor, [
     ['play', '재생', () => { const j = shown.tracks.indexOf(t); if (j >= 0) playFromShown(j); }],
-    ['listAdd', '다른 플레이리스트에 넣기…', () => addToPlaylistMenu(anchor, [t])],
-    null,
-    ['trash', '이 목록에서 빼기', () => { const j = shown.tracks.indexOf(t); if (j >= 0) removeTracks([j]); }],
+    ['listAdd', '다른 플레이리스트에 넣기…', () => addToPlaylistMenu(anchor, [t], shown.virtual ? null : shown)],
+    !shown.virtual && null,
+    !shown.virtual && ['trash', '이 목록에서 빼기', () => { const j = shown.tracks.indexOf(t); if (j >= 0) removeTracks([j]); }],
   ]);
 }
-function playlistMenu(anchor) {
-  const items = pls.map(p => [p === shown ? 'check' : p === playPl && P.index >= 0 ? 'vol' : 'list', p.name, () => showPlaylist(p), `${p.tracks.length}곡`]);
-  items.push(null, ['plus', '새 플레이리스트 만들기', () => createPlaylist()], ['edit', '플레이리스트 관리', managePlaylists]);
-  openMenu(anchor, items, { align: 'left' });
+/** 홈의 곡 (최근 · 장르) 메뉴 */
+function songMenu(anchor, t, onPlay) {
+  openMenu(anchor, [
+    ['play', '재생', onPlay],
+    ['listAdd', '플레이리스트에 넣기…', () => addToPlaylistMenu(anchor, [t])],
+  ]);
 }
 /* 관리 창: 이름 바꾸기 · 복사 · 순서 · 내보내기 · 지우기 · 가져오기 */
 const MGR = { render: null };
@@ -857,7 +1340,7 @@ function managePlaylists() {
   const close = () => { m.remove(); openModal = null; MGR.render = null; };
   const ib = (ic, title, fn, extra = {}) => el('button', { class: 'ib', title, 'aria-label': title, onclick: fn, ...extra }, icon(ic));
   MGR.render = () => {
-    rows.replaceChildren(...pls.map((p, i) => el('div', { class: 'plrow' + (p === shown ? ' cur' : '') },
+    rows.replaceChildren(...pls.map((p, i) => el('div', { class: 'plrow' + (p === shown && NAV.view === 'list' ? ' cur' : '') },
       el('button', { class: 'open', onclick: () => { close(); showPlaylist(p); } },
         el('span', { class: 'nm' }, p.name),
         el('small', {}, [`${p.tracks.length}곡`, p.tracks.length ? fmtLong(p.tracks.reduce((s, t) => s + (t.duration || 0), 0)) : '', p === playPl && P.index >= 0 ? '재생 중' : ''].filter(Boolean).join(' · '))),
@@ -911,11 +1394,29 @@ async function importPlaylists() {
   if (last) { queueMeta(last.tracks); showPlaylist(last); }
 }
 
+/* ======================= 왼쪽 메뉴 (PC): 플레이리스트 목록 ======================= */
+let sideSig = '';
+function markSide(rebuild) {
+  const box = $('sidePls');
+  const sig = pls.map(p => [p.id, p.name, p.tracks.length, ...p.tracks.slice(0, 6).map(t => t.key)].join('\u0002')).join('|');
+  if (rebuild !== false && (sig !== sideSig || !box.childElementCount)) {
+    sideSig = sig;
+    box.replaceChildren(...pls.map(p => {
+      const b = el('button', { class: 'spl', 'data-pl': p.id, title: p.name, onclick: () => showPlaylist(p) },
+        mosaic(p.tracks, p.name, 'sm'), el('span', { class: 'tx' }, el('span', { class: 'nm' }, p.name), el('small', {}, `${p.tracks.length}곡`)), el('span', { class: 'eqi' }, icon('vol')));
+      b.addEventListener('contextmenu', e => { e.preventDefault(); plMenu(pointRect(e.clientX, e.clientY), p); });
+      return b;
+    }));
+  }
+  for (const b of box.children) b.classList.toggle('on', NAV.view === 'list' && shown.id === b.dataset.pl);
+  markPlaying();
+}
+
 /* 편집: 여러 곡 고르기 · 끌어서 순서 바꾸기 */
 const EDIT = { on: false, sel: new Set() };
 let DRAG = null;
 function enterEdit() {
-  if (!shown.tracks.length) return;
+  if (!shown.tracks.length || shown.virtual) return;
   EDIT.on = true; EDIT.sel.clear();
   if (!$('searchBox').hidden) { query = ''; $('searchInput').value = ''; $('searchBox').hidden = true; }
   $('listPane').classList.add('editing'); document.body.classList.add('editing');
@@ -942,11 +1443,11 @@ function renderEditBar() {
       el('span', { class: 'n' }, n ? `${n}곡 선택` : '곡을 눌러 고르고, ≡ 를 끌어 순서를 바꿔요'),
       el('button', { class: 'btn ghost', onclick: () => { if (all) EDIT.sel.clear(); else L.forEach(t => EDIT.sel.add(t)); renderEditBar(); renderRows(); } }, all ? '선택 해제' : '모두 선택')),
     el('div', { class: 'ea' },
-      el('button', { class: 'btn', disabled: !n, onclick: e => addToPlaylistMenu(rectOf(e.currentTarget), L.filter(t => EDIT.sel.has(t))) }, icon('listAdd'), '플레이리스트에 넣기'),
+      el('button', { class: 'btn', disabled: !n, onclick: e => addToPlaylistMenu(rectOf(e.currentTarget), L.filter(t => EDIT.sel.has(t)), shown) }, icon('listAdd'), '플레이리스트에 넣기'),
       el('button', { class: 'btn', disabled: !n, onclick: () => removeTracks(selectedIdx()) }, icon('trash'), '빼기'),
       el('button', { class: 'btn primary', onclick: exitEdit }, '완료')));
 }
-// ≡ 를 끌어 순서 바꾸기 (마우스 · 터치 모두). 행은 다시 그려지므로 vlist 가 포인터를 잡고 있는다
+// ≡ 를 끌어 순서 바꾸기 (마우스 · 터치 모두). 줄은 다시 그려지므로 vlist 가 포인터를 잡고 있는다. 화면 끝에 가까우면 페이지를 굴린다
 vlist.addEventListener('pointerdown', e => {
   const g = e.target.closest && e.target.closest('.grip');
   if (!g || !EDIT.on || DRAG) return;
@@ -955,20 +1456,21 @@ vlist.addEventListener('pointerdown', e => {
   if (!(from >= 0 && from < L.length) || fromK < 0) return;
   e.preventDefault();
   vlist.setPointerCapture(e.pointerId);
-  const box = vlist.getBoundingClientRect();
   const ghost = row.cloneNode(true); ghost.classList.add('dragghost'); ghost.classList.remove('dragging');
   const line = el('div', { class: 'dropline' });
   vlist.append(ghost, line);
   const d = DRAG = { from, k: fromK, y: e.clientY, raf: 0, id: e.pointerId };
-  const yIn = y => y - box.top + vlist.scrollTop;
   const tick = () => {
     if (DRAG !== d) return;
-    if (d.y < box.top + 44) vlist.scrollTop -= Math.ceil((box.top + 44 - d.y) / 6);
-    else if (d.y > box.bottom - 44) vlist.scrollTop += Math.ceil((d.y - box.bottom + 44) / 6);
-    const y = yIn(d.y);
-    d.k = clamp(Math.floor((y - 4) / ROW_H), 0, view.length - 1);
+    const sb = scroller.getBoundingClientRect();
+    const barTop = narrow() ? Math.min($('pbar').getBoundingClientRect().top, $('editBar').hidden ? Infinity : $('editBar').getBoundingClientRect().top) : Math.min(sb.bottom, $('editBar').hidden ? Infinity : $('editBar').getBoundingClientRect().top);
+    const topEdge = sb.top + 70, bottomEdge = Math.min(sb.bottom, barTop) - 40;
+    if (d.y < topEdge) scroller.scrollTop -= Math.ceil((topEdge - d.y) / 5);
+    else if (d.y > bottomEdge) scroller.scrollTop += Math.ceil((d.y - bottomEdge) / 5);
+    const y = d.y - vlist.getBoundingClientRect().top;
+    d.k = clamp(Math.floor(y / ROW_H), 0, view.length - 1);
     ghost.style.top = (y - ROW_H / 2) + 'px';
-    line.style.top = ((d.k > fromK ? d.k + 1 : d.k) * ROW_H + 3) + 'px';
+    line.style.top = ((d.k > fromK ? d.k + 1 : d.k) * ROW_H - 1) + 'px';
     d.raf = requestAnimationFrame(tick);
   };
   const move = ev => { if (DRAG === d && ev.pointerId === d.id) d.y = ev.clientY; };
@@ -990,6 +1492,129 @@ vlist.addEventListener('pointerdown', e => {
   renderRows();
   d.raf = requestAnimationFrame(tick);
 });
+
+/* ======================= 재생 화면 (전체) =======================
+   휴대폰: 미니 플레이어를 누르면 아래에서 올라옴 (아래로 밀거나 ⌄ 로 닫기). '다음 트랙' · '가사' 탭.
+   PC: 재생 막대는 그대로 두고 그 위를 덮음. 오른쪽에 다음 트랙 · 가사 */
+const PL = { open: false, tab: null, timer: 0 };
+function openPlayer(tab) {
+  if (!list.length && P.index < 0) { toast('재생할 곡이 없어요 — 먼저 음악을 추가해 주세요'); return; }
+  if (openMenuClose) openMenuClose();
+  const box = $('player');
+  clearTimeout(PL.timer);
+  PL.open = true; box.hidden = false;
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (PL.open) box.classList.add('show'); }));
+  PL.timer = setTimeout(() => { if (PL.open) document.body.classList.add('pl-open'); }, 340);   // 다 올라온 뒤에 뒤 화면을 쉬게 함
+  setPlayerTab(tab !== undefined ? tab : narrow() ? null : (PL.tab || 'queue'));
+  renderPlayerArt(); renderModes(); onPlayState(); updateTimeUI(true);
+  setIcon($('btnExpand'), 'chevDown'); $('btnExpand').title = '재생 화면 닫기';
+  startViz();
+}
+function closePlayer() {
+  if (!PL.open) return;
+  PL.open = false;
+  const box = $('player');
+  box.classList.remove('show'); document.body.classList.remove('pl-open');
+  clearTimeout(PL.timer);
+  PL.timer = setTimeout(() => { if (!PL.open) box.hidden = true; }, 320);
+  setIcon($('btnExpand'), 'up'); $('btnExpand').title = '재생 화면';
+  hostLyrics();
+}
+function togglePlayer() { if (PL.open) closePlayer(); else openPlayer(); }
+function setPlayerTab(tab) {
+  if (!narrow() && !tab) tab = 'queue';
+  PL.tab = tab;
+  $('player').dataset.tab = tab || '';
+  document.querySelectorAll('[data-ptab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.ptab === tab)));
+  if (tab === 'queue') renderQueue();
+  hostLyrics();
+  if (isPlaying()) startViz();
+}
+function renderPlayerArt() {
+  const img = $('pArtImg');
+  if (P.artUrl) { img.src = P.artUrl; img.hidden = false; } else img.hidden = true;
+}
+/** 가사 칸은 하나: PC 가사 화면 ↔ 재생 화면의 가사 탭 사이를 옮겨 다닌다 */
+function hostLyrics() {
+  const pane = $('paneLyr');
+  const inPlayer = PL.open && PL.tab === 'lyr';
+  const host = inPlayer ? $('pPanel') : $('viewLyr');
+  if (pane.parentNode !== host) host.append(pane);
+  $('pQueue').hidden = !(PL.open && PL.tab === 'queue');
+  const show = inPlayer || (NAV.view === 'lyr' && !narrow());
+  const was = !pane.hidden;
+  pane.hidden = !show;
+  if (show) {
+    const t = list[P.index];
+    if (t && LY.key !== t.key) loadLyrics(t);
+    else if (!was || inPlayer !== LY.inPlayer) renderLyrics();
+  }
+  LY.inPlayer = inPlayer;
+}
+/** 다음에 나올 곡 번호들 (무작위 재생 · 반복 설정대로) */
+function upcoming(max) {
+  const n = list.length, out = [];
+  if (!n || P.index < 0) return list.slice(0, max).map((_, i) => i);
+  if (S.shuffle) {
+    if (order.length !== n) rebuildOrder();
+    const k = order.indexOf(P.index);
+    for (let j = k + 1; j < n && out.length < max; j++) out.push(order[j]);
+  } else {
+    for (let j = P.index + 1; j < n && out.length < max; j++) out.push(j);
+    if (S.repeat === 'all') for (let j = 0; j < P.index && out.length < max; j++) out.push(j);
+  }
+  return out;
+}
+function renderQueue() {
+  const box = $('pQueue');
+  if (!PL.open || PL.tab !== 'queue') return;
+  const cur = list[P.index], kids = [];
+  const qrow = (t, i, now) => el('div', { class: 'qrow' + (now ? ' cur' : ''), role: 'button', tabindex: '0', onclick: () => { if (!now) playIndex(i); } },
+    thumbEl(t.key, { lazy: true, extra: now ? el('span', { class: 'nowp' }, icon(isPlaying() ? 'vol' : 'pause')) : null }),
+    el('span', { class: 'tx' }, el('span', { class: 't1' }, displayTitle(t)), el('span', { class: 't2' }, subLine(t))),
+    el('span', { class: 'd num' }, t.duration ? fmtTime(t.duration) : ''));
+  if (cur) kids.push(el('div', { class: 'qh' }, '지금 재생 중'), qrow(cur, P.index, true));
+  const up = upcoming(80);
+  if (up.length) {
+    kids.push(el('div', { class: 'qh' }, `다음 트랙 · ${playPl.name}`, S.shuffle ? el('small', {}, ' (무작위)') : null));
+    for (const i of up) kids.push(qrow(list[i], i, false));
+    if (list.length - 1 > up.length && !(S.repeat !== 'all' && !S.shuffle)) kids.push(el('div', { class: 'hint qmore' }, `… 모두 ${list.length}곡`));
+  } else if (cur) kids.push(el('div', { class: 'hint qmore' }, S.repeat === 'off' ? '마지막 곡이에요' : '다음 곡이 없어요'));
+  box.replaceChildren(...kids);
+}
+function playerMenu(anchor) {
+  const t = list[P.index];
+  openMenu(anchor, [
+    t && ['listAdd', '플레이리스트에 넣기…', () => addToPlaylistMenu(anchor, [t])],
+    playPl && ['list', `'${playPl.name}' 보기`, () => { closePlayer(); showPlaylist(playPl); }],
+    null,
+    ['moon', P.sleepAt ? `수면 타이머 (${Math.max(0, Math.ceil((P.sleepAt - Date.now()) / 60000))}분 남음)` : '수면 타이머', () => openMenu(anchor, [
+      [P.sleepAt ? 'close' : 'moon', '끄기', () => setSleep(0)], ['moon', '15분', () => setSleep(15)], ['moon', '30분', () => setSleep(30)], ['moon', '1시간', () => setSleep(60)], ['moon', '1시간 30분', () => setSleep(90)],
+    ])],
+    ['fx', '음장 효과', () => go('fx')],
+    ['eq', '이퀄라이저', () => go('eq')],
+  ]);
+}
+// 휴대폰: 재생 화면을 아래로 밀어서 닫기
+(() => {
+  const box = $('player');
+  let y0 = null, t0 = 0, dy = 0;
+  box.addEventListener('pointerdown', e => {
+    if (!narrow() || e.button > 0 || e.target.closest('input, .pl-panel, .menu, button.ib, .play')) { y0 = null; return; }
+    y0 = e.clientY; t0 = Date.now(); dy = 0;
+  });
+  box.addEventListener('pointermove', e => {
+    if (y0 == null) return;
+    dy = e.clientY - y0;
+    if (dy > 0) { box.classList.add('dragging'); box.style.transform = `translateY(${dy}px)`; }
+  });
+  const end = () => {
+    if (y0 == null) return;
+    y0 = null; box.classList.remove('dragging'); box.style.transform = '';
+    if (dy > 110 || (dy > 50 && Date.now() - t0 < 300)) closePlayer();
+  };
+  box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+})();
 
 /* ======================= 공통 컨트롤 ======================= */
 function switchEl(on, onChange, label) {
@@ -1039,7 +1664,7 @@ function updateBadges() {
   for (const id of ['fxBadge', 'fxBadgeM']) { const b = $(id); b.textContent = n; b.hidden = !n; }
 }
 function renderFx() {
-  const pane = $('paneFx'), st0 = pane.scrollTop;
+  const pane = $('paneFx'), st0 = scroller.scrollTop;
   const top = el('div', { class: 'fxtop' },
     el('div', {}, el('div', { class: 'label' }, '음장 효과'), el('div', { class: 'hint' }, S.fxOn ? `켜진 효과 ${activeFxCount()}개` : '꺼짐 — 원음으로 듣는 중')),
     el('span', { class: 'sp' }),
@@ -1060,7 +1685,7 @@ function renderFx() {
     for (const def of defs) listEl.append(fxCard(def));
   }
   pane.replaceChildren(top, chips, listEl);
-  pane.scrollTop = st0;
+  if (NAV.view === 'fx') scroller.scrollTop = st0;
 }
 function fxCard(def) {
   const st = fxState(def.id);
@@ -1100,10 +1725,7 @@ function refreshPresetChips() {
   document.querySelectorAll('#presetChips .chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
 }
 function refreshFxHeader() {
-  const pane = $('paneFx'), old = pane.querySelector('.fxtop'), oldChips = pane.querySelector('.chips');
-  const st0 = pane.scrollTop;
-  renderFx(); pane.scrollTop = st0;
-  void old; void oldChips;
+  renderFx();
   updateBadges();
 }
 function applySoundPreset(pr) {
@@ -1267,6 +1889,8 @@ function renderSettings() {
       srow('이어 듣기', '다시 열면 마지막 곡의 그 위치부터', switchEl(S.resume, v => { S.resume = v; saveSettings(); }, '이어 듣기'))),
     el('div', { class: 'sgroup' }, el('h3', {}, '가사'),
       srow('인터넷에서 가사 자동으로 찾기', '곡이 바뀌면 제목 · 가수 · 앨범 · 길이로 LRCLIB(lrclib.net)와 다른 사용자들이 고른 가사 목록에서 찾아요', switchEl(S.lyrAuto, v => { S.lyrAuto = v; saveSettings(); }, '가사 자동으로 찾기')),
+      srow('싱크 없는 가사 자동으로 맞추기', '시간 정보가 없는 가사는 노래를 한 번 분석해 줄마다 시간을 맞춰 따라 넘어가게 해요 (곡마다 한 번, 결과는 이 기기에만 저장)',
+        switchEl(S.lyrSync, v => { S.lyrSync = v; saveSettings(); const t = list[P.index]; if (t && LY.key === t.key) loadLyrics(t); }, '싱크 없는 가사 자동으로 맞추기')),
       srow('내가 고른 가사를 다른 사용자와 나누기', '직접 고르거나 틀렸다고 한 가사를 자동으로 알려, 여러 사람이 고른 가사가 모두의 앱에 나와요. 곡 제목 · 가수 · 길이와 가사 번호만 익명으로 보내요.', switchEl(S.lyrShare, v => { S.lyrShare = v; saveSettings(); if (v) flushFeedback().catch(() => {}); }, '고른 가사 나누기'))),
     platform.update ? el('div', { class: 'sgroup' }, el('h3', {}, '업데이트'),
       srow('자동 업데이트', platform.name === 'android' ? '새 버전이 나오면 알려 줘요 — [받기]를 누르면 브라우저에서 받아 설치해요' : '새 버전을 알아서 받아 두었다가 앱을 닫을 때 설치해요',
@@ -1274,6 +1898,8 @@ function renderSettings() {
       srow(`지금 버전 ${VERSION}`, updateHint(), el('button', { class: 'btn', id: 'updCheckBtn', onclick: () => checkUpdate({ manual: true }) }, '업데이트 확인'))) : '',
     el('div', { class: 'sgroup' }, el('h3', {}, '화면'),
       srow('테마', null, segmented([['system', '시스템'], ['dark', '어둡게'], ['light', '밝게']], S.theme, v => { S.theme = v; saveSettings(); applyTheme(); })),
+      srow('유리 효과', '자동: 휴대폰은 가볍게, PC는 풍부하게 굴절 · 배터리 절약 모드이거나 배터리가 20% 이하면 꺼져요',
+        segmented([['auto', '자동'], ['rich', '풍부하게'], ['light', '가볍게'], ['off', '끄기']], S.glass, v => { S.glass = v; saveSettings(); setGlass(v, narrow()); })),
       srow('강조 색', null, el('div', { class: 'swatches' }, ...[['blue', '#4c9dff'], ['mint', '#1fc8a0'], ['coral', '#ff7158'], ['violet', '#8f7dff'], ['amber', '#f2b33d']].map(([id, c]) =>
         el('button', { class: 'swatch', style: `background:${c}`, 'aria-pressed': String(S.accent === id), 'aria-label': id, onclick: () => { S.accent = id; saveSettings(); applyTheme(); renderSettings(); } }))))),
     el('div', { class: 'sgroup' }, el('h3', {}, '초기화'),
@@ -1314,6 +1940,7 @@ async function localLyrics(t) {
 }
 async function loadLyrics(t, { force = false, retry = false } = {}) {
   if (lyRetry) lyRetry();
+  stopAutoSync();
   const tok = ++LY.tok;
   LY.key = t ? t.key : null; LY.data = null; LY.idx = -1; LY.form = false; LY.fix = null; LY.prev = null; LY.slow = false;
   if (!t) { LY.state = 'idle'; renderLyrics(); return; }
@@ -1371,9 +1998,10 @@ function retryLyricsLater(t, tok, state) {
   const cancel = () => { clearTimeout(timer); window.removeEventListener('online', onOnline); lyRetry = null; };
   lyRetry = cancel;
 }
-const fmtSrc = d => !d ? '' : d.source === 'lrc' ? '.lrc 파일' : d.source === 'tag' ? '음악 파일에 들어 있는 가사'
-  : d.source === 'community' ? '다른 사용자들이 고른 가사' + (d.synced ? ' · 싱크' : '') : d.source === 'manual' ? '내가 고른 가사' + (d.synced ? ' · 싱크' : '')
-  : d.source === 'lrclib' ? 'LRCLIB 자동 검색' + (d.synced ? ' · 싱크' : '') : '';
+const syncLabel = d => d.auto ? (LY.auto && LY.auto.data === d && (LY.auto.confidence >= 0.6 || LY.auto.anchors.length >= 2) ? ' · 자동 맞춤' : ' · 자동 맞춤(대략)') : d.synced ? ' · 싱크' : '';
+const fmtSrc = d => !d ? '' : d.source === 'lrc' ? '.lrc 파일' + syncLabel(d) : d.source === 'tag' ? '음악 파일에 들어 있는 가사' + syncLabel(d)
+  : d.source === 'community' ? '다른 사용자들이 고른 가사' + syncLabel(d) : d.source === 'manual' ? '내가 고른 가사' + syncLabel(d)
+  : d.source === 'lrclib' ? 'LRCLIB 자동 검색' + syncLabel(d) : '';
 const ONLINE = ['lrclib', 'manual', 'community'];
 function renderLyrics() {
   const pane = $('paneLyr');
@@ -1403,12 +2031,21 @@ function renderLyrics() {
     kids.push(msg(LY.data && LY.data.match ? '연주곡이에요 — 가사가 없어요' : '가사가 없는 곡이에요'));
     if (online) kids.push(lyricsFooter());
   } else if (LY.data) {
-    const body = el('div', { class: 'lybody' + (LY.data.synced ? ' synced' : ' plain'), id: 'lyBody' });
+    const A = LY.auto && LY.auto.data === LY.data ? LY.auto : null;
+    if (A && A.state === 'working') kids.push(el('div', { class: 'lynote' }, el('span', { class: 'spin' }), '노래에 맞춰 가사 시간을 맞추는 중이에요…'));
+    const body = el('div', { class: 'lybody' + (LY.data.synced ? ' synced' : ' plain') + (LY.data.auto ? ' auto' : ''), id: 'lyBody' });
     LY.data.lines.forEach((l, i) => {
       if (!l.text) { body.append(el('p', { class: 'ly gap', 'data-i': i })); return; }
       body.append(el('p', { class: 'ly', 'data-i': i }, l.text));
     });
-    if (LY.data.synced) body.addEventListener('click', e => { const p = e.target.closest('.ly'); if (!p) return; const l = LY.data.lines[+p.dataset.i]; if (l && l.t != null) { seekTo(l.t); LY.userScroll = 0; } });
+    if (LY.data.auto) {
+      // 자동 맞춤: 줄을 누르면 '지금 이 줄을 부르는 중' 으로 맞춤 (가장 빨리 정확해지는 방법). 길게 누르기 · 오른쪽 클릭 = 메뉴
+      body.classList.toggle('rough', !(A && (A.confidence >= 0.25 || A.anchors.length)));
+      kids.push(el('div', { class: 'lynote auto' }, icon('check'),
+        el('span', {}, A && A.anchors.length ? `내가 맞춘 줄 ${A.anchors.length}개로 맞췄어요 · 어긋나면 지금 부르는 줄을 눌러 주세요` : '시간 정보가 없는 가사라 노래를 분석해 대략 맞췄어요 · 지금 부르는 줄을 누르면 거기에 맞춰져요')));
+      body.addEventListener('click', e => { const p = e.target.closest('.ly:not(.gap)'); if (p) anchorLine(+p.dataset.i); });
+      body.addEventListener('contextmenu', e => { const p = e.target.closest('.ly:not(.gap)'); if (!p) return; e.preventDefault(); autoLineMenu(pointRect(e.clientX, e.clientY), +p.dataset.i); });
+    } else if (LY.data.synced) body.addEventListener('click', e => { const p = e.target.closest('.ly'); if (!p) return; const l = LY.data.lines[+p.dataset.i]; if (l && l.t != null) { seekTo(l.t); LY.userScroll = 0; } });
     kids.push(body);
     if (online) kids.push(lyricsFooter());
   }
@@ -1416,6 +2053,82 @@ function renderLyrics() {
   pane.scrollTop = 0;
   LY.idx = -2;
   syncLyrics(true);
+  maybeAutoSync();
+}
+
+/* ---------- 자동 싱크: 시간 정보가 없는 가사를 노래에 맞추기 (js/autosync.js) ----------
+   가사 화면이 보일 때만, 곡마다 한 번 분석하고 기기에 저장 (다음부터는 바로). 사용자가 줄을 눌러 맞춘 시간도 함께 저장 */
+function trackDur(t) {
+  const a = engine.deck.a;
+  return engine.deck.track === t && isFinite(a.duration) && a.duration > 0 ? a.duration : (t ? t.duration || 0 : 0);
+}
+function stopAutoSync() { if (LY.auto && LY.auto.ctrl) LY.auto.ctrl.abort(); LY.auto = null; }
+function maybeAutoSync() {
+  const d = LY.data, t = list[P.index];
+  if (!S.lyrSync || !d || d.synced || d.instrumental || !t || LY.key !== t.key || (LY.auto && LY.auto.data === d)) return;
+  if (d.lines.filter(l => l.text).length < 2 || !(trackDur(t) >= 20)) return;
+  runAutoSync(t, d);
+}
+async function runAutoSync(t, d) {
+  const ctrl = new AbortController(), dur = trackDur(t), lines = d.lines.map(l => l.text || '');
+  const A = LY.auto = { state: 'working', ctrl, key: t.key, data: d, lines, dur, times: null, anchors: [], confidence: 0, seq: 0 };
+  const timer = setTimeout(() => { if (LY.auto === A && A.state === 'working') renderLyrics(); }, 400);   // 금방 끝나면 '맞추는 중' 을 안 보임
+  try {
+    const r = await autoSync({ key: t.key, url: platform.mediaUrl(t.key), lines, duration: dur, signal: ctrl.signal });
+    if (LY.auto !== A || LY.data !== d) return;
+    if (!r || !Array.isArray(r.times) || r.times.length !== lines.length) throw new Error('no times');
+    Object.assign(A, { state: 'done', ctrl: null, times: r.times, anchors: r.anchors || [], method: r.method, confidence: r.confidence || 0 });
+    applyAutoTimes(A);
+    renderLyrics();                 // 설명은 가사 위 안내 줄에 (알림을 덮어쓰지 않게 토스트는 안 띄움)
+  } catch (e) {
+    if (ctrl.signal.aborted || LY.auto !== A) return;
+    A.state = 'failed'; A.ctrl = null;
+    renderLyrics();
+  } finally { clearTimeout(timer); }
+}
+/** 맞춘 시간을 가사 줄에 넣는다 (빈 줄 · 머리말은 다음 줄 시간). A.times 에는 사용자가 맞춘 줄이 이미 반영돼 있음 */
+function applyAutoTimes(A) {
+  const d = A.data, n = d.lines.length, times = A.times;
+  const out = new Array(n);
+  let next = null;
+  for (let i = n - 1; i >= 0; i--) { if (times[i] != null && isFinite(times[i])) next = times[i]; out[i] = times[i] != null && isFinite(times[i]) ? times[i] : next; }
+  let prev = 0;
+  for (let i = 0; i < n; i++) { if (out[i] == null) out[i] = prev; out[i] = Math.max(prev, out[i]); prev = out[i]; }
+  d.lines.forEach((l, i) => { l.t = out[i]; });
+  d.synced = true; d.auto = true;
+}
+/** 사용자가 맞춘 줄 목록을 바꾸고 다시 맞추기: 바로 앞뒤를 늘이고 줄여 보여 준 뒤, 저장해 둔 목소리 곡선으로 다시 정렬한 결과로 바꿈 */
+function setAnchors(A, anchors, msg) {
+  const seq = ++A.seq;
+  A.anchors = anchors;
+  if (anchors.length) { A.times = applyAnchors(A.times, anchors); applyAutoTimes(A); }
+  LY.idx = -2; LY.userScroll = 0; syncLyrics(true);
+  saveAnchors(A.key, A.lines, A.dur, anchors).then(r => {
+    if (seq !== A.seq || LY.auto !== A || !r || !Array.isArray(r.times) || r.times.length !== A.lines.length) return;
+    A.times = r.times; A.confidence = r.confidence || 0;
+    applyAutoTimes(A); renderLyrics();
+  }).catch(() => {});
+  if (msg) toast(msg);
+}
+/** 줄을 눌렀을 때: '지금 이 줄을 부르는 중' (사람은 듣고 조금 늦게 누르므로 0.3초 앞당김) */
+function anchorLine(i) {
+  const A = LY.auto, d = LY.data, t = list[P.index];
+  if (!A || A.data !== d || A.state !== 'done' || !d.lines[i] || !t || t.key !== A.key) return;
+  const now = Math.max(0, (engine.deck.a.currentTime || 0) - 0.3);
+  const anchors = [...A.anchors.filter(x => x.i !== i && Math.abs(x.t - now) > 0.4), { i, t: now }].sort((a, b) => a.i - b.i);
+  // 순서가 맞지 않는 기준점(앞 줄인데 시간이 더 늦음)은 새로 누른 것을 믿고 뺀다
+  const ok = anchors.filter(x => x.i === i || (x.i < i ? x.t < now : x.t > now));
+  setAnchors(A, ok, ok.length > 1 ? `맞춘 줄 ${ok.length}개를 기준으로 시간을 다시 맞췄어요` : '이 줄을 지금 위치에 맞추고 나머지도 다시 맞췄어요');
+}
+function autoLineMenu(anchor, i) {
+  const A = LY.auto, d = LY.data;
+  if (!A || A.data !== d || A.state !== 'done' || !d.lines[i]) return;
+  const playing = list[P.index] && list[P.index].key === A.key;
+  openMenu(anchor, [
+    playing && ['check', '지금 부르는 줄로 맞추기', () => anchorLine(i)],
+    ['play', '이 줄부터 듣기', () => { seekTo(d.lines[i].t || 0); LY.userScroll = 0; }],
+    A.anchors.length && ['close', '내가 맞춘 시간 모두 지우기', () => setAnchors(A, [], '자동으로 맞춘 시간으로 되돌렸어요')],
+  ]);
 }
 function lyricsFooter() {
   return el('div', { class: 'credit' }, '가사 제공: LRCLIB (lrclib.net) · ',
@@ -1440,6 +2153,7 @@ function shareChoice(t, wrongId, correct) {
 function setLyricsLocal(t, l, state) {
   cachePut(t.key, l);
   if (list[P.index] !== t) return;
+  stopAutoSync();
   LY.data = l; LY.state = state || (!l ? 'none' : l.instrumental ? 'instrumental' : 'ok'); LY.form = false; LY.fix = null;
   renderLyrics();
 }
@@ -1511,77 +2225,83 @@ function syncLyrics(force) {
 }
 ['wheel', 'touchmove'].forEach(ev => $('paneLyr').addEventListener(ev, () => { LY.userScroll = Date.now(); }, { passive: true }));
 
-/* ======================= 테마 · 탭 ======================= */
+/* ======================= 테마 ======================= */
+let vizColor = '';
 const mqDark = matchMedia('(prefers-color-scheme: dark)');
 function applyTheme() {
   const theme = S.theme === 'system' ? (mqDark.matches ? 'dark' : 'light') : S.theme;
   const root = document.documentElement;
-  root.dataset.theme = theme; root.dataset.accent = S.accent;
-  if (platform.setTheme) platform.setTheme(getComputedStyle(root).getPropertyValue('--panel').trim(), theme === 'light');
+  root.dataset.theme = theme; root.dataset.accent = S.accent; vizColor = '';
+  if (platform.setTheme) platform.setTheme(getComputedStyle(root).getPropertyValue('--bg').trim(), theme === 'light');
   drawCurve();
 }
 mqDark.addEventListener('change', () => { if (S.theme === 'system') applyTheme(); });
-function setTab(tab) {
-  if (!['list', 'fx', 'eq', 'lyr', 'set'].includes(tab)) tab = 'list';
-  S.tab = tab; app.dataset.tab = tab;
-  if (tab !== 'list') P.lastSide = tab;
-  const side = tab === 'list' ? P.lastSide : tab;
-  $('paneFx').hidden = side !== 'fx'; $('paneEq').hidden = side !== 'eq'; $('paneSet').hidden = side !== 'set'; $('paneLyr').hidden = side !== 'lyr';
-  document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === side)));
-  document.querySelectorAll('.btabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-  if (side === 'eq') requestAnimationFrame(drawCurve);
-  if (side === 'set') renderSettings();
-  if (side === 'lyr') { const t = list[P.index]; if (t && LY.key !== t.key) loadLyrics(t); else { renderLyrics(); LY.idx = -2; syncLyrics(true); } }
-  scheduleRows(); saveSettings();
-}
-document.querySelectorAll('.tab, .btabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+// 휴대폰 ↔ 넓은 화면 (창 크기 · 화면 회전)
+PHONE_MQ.addEventListener('change', () => {
+  setGlass(S.glass, narrow());
+  if (narrow() && NAV.view === 'lyr') go('home');
+  if (PL.open) setPlayerTab(PL.tab);
+  hostLyrics(); renderTopbar(); updateTimeUI(true);
+  if (NAV.view === 'list') { measureList(); scheduleRows(); }
+  sizeAllViz();
+  if (isPlaying()) startViz();
+});
 
-/* ======================= 비주얼라이저 ======================= */
-const viz = $('viz'), vg = viz.getContext('2d');
+/* ======================= 비주얼라이저 =======================
+   PC 재생 막대 · 재생 화면 두 곳. 보이는 곳이 없으면 그리지 않고 멈춘다 (휴대폰에서 재생 화면을 닫으면 0) */
 const fbuf = new Uint8Array(engine.analyser.frequencyBinCount);
-let bars = new Float32Array(64), vizRAF = 0, vizW = 0, vizH = 0;
-function sizeViz() {
-  const dpr = window.devicePixelRatio || 1;
-  vizW = viz.clientWidth; vizH = viz.clientHeight;
-  viz.width = Math.round(vizW * dpr); viz.height = Math.round(vizH * dpr);
-  vg.setTransform(dpr, 0, 0, dpr, 0, 0);
-  drawViz(true);
+const VZ = [
+  { c: $('viz'), on: () => !narrow() },
+  { c: $('pViz'), on: () => PL.open },
+].map(v => ({ ...v, g: v.c.getContext('2d'), w: 0, h: 0, bars: new Float32Array(64) }));
+function sizeViz(v) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  v.w = v.c.clientWidth; v.h = v.c.clientHeight;
+  v.c.width = Math.round(v.w * dpr); v.c.height = Math.round(v.h * dpr);
+  v.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawViz(v, true);
 }
-new ResizeObserver(sizeViz).observe(viz);
-function drawViz(idle) {
-  if (!vizW) return;
-  const n = clamp(Math.floor(vizW / 6), 12, 64), gap = 2, bw = (vizW - gap * (n - 1)) / n;
+function sizeAllViz() { VZ.forEach(sizeViz); }
+VZ.forEach(v => new ResizeObserver(() => { sizeViz(v); if (v.w && v.on() && isPlaying()) startViz(); }).observe(v.c));
+function drawViz(v, idle) {
+  if (!v.w || !v.h) return 0;
+  const n = clamp(Math.floor(v.w / 7), 12, 64), gap = 2, bw = (v.w - gap * (n - 1)) / n;
   const sr = engine.ctx.sampleRate, bins = fbuf.length, binHz = sr / 2 / bins;
-  if (!idle) engine.analyser.getByteFrequencyData(fbuf);
   let energy = 0;
   for (let i = 0; i < n; i++) {
-    let v = 0;
+    let x = 0;
     if (!idle) {
       const f0 = 40 * Math.pow(400, i / n), f1 = 40 * Math.pow(400, (i + 1) / n);
       const b0 = Math.floor(f0 / binHz), b1 = Math.max(b0 + 1, Math.floor(f1 / binHz));
-      for (let b = b0; b < b1 && b < bins; b++) v = Math.max(v, fbuf[b]);
-      v /= 255;
+      for (let b = b0; b < b1 && b < bins; b++) x = Math.max(x, fbuf[b]);
+      x /= 255;
     }
-    bars[i] = Math.max(v, bars[i] * 0.86);
-    energy += bars[i];
+    v.bars[i] = Math.max(x, v.bars[i] * 0.86);
+    energy += v.bars[i];
   }
-  vg.clearRect(0, 0, vizW, vizH);
-  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-  vg.fillStyle = accent;
+  v.g.clearRect(0, 0, v.w, v.h);
+  if (!vizColor) vizColor = getComputedStyle(document.documentElement).getPropertyValue('--viz').trim() || '#fff';
+  v.g.fillStyle = vizColor;
   for (let i = 0; i < n; i++) {
-    const v = bars[i], hgt = Math.max(2, v * vizH);
-    vg.globalAlpha = 0.35 + 0.65 * v;
-    vg.fillRect(i * (bw + gap), vizH - hgt, bw, hgt);
+    const x = v.bars[i], hgt = Math.max(2, x * v.h);
+    v.g.globalAlpha = 0.3 + 0.6 * x;
+    v.g.fillRect(i * (bw + gap), v.h - hgt, bw, hgt);
   }
-  vg.globalAlpha = 1;
+  v.g.globalAlpha = 1;
   return energy;
 }
+let vizRAF = 0, vizTick = 0;
 function vizLoop() {
   const playing = isPlaying();
-  updateTimeUI();
-  syncLyrics();
-  const e = drawViz(!playing);
-  if (!playing && e < 0.05) { vizRAF = 0; drawViz(true); return; }
+  updateTimeUI(); syncLyrics();
+  const vis = VZ.filter(v => v.on() && v.w);
+  if (!vis.length) { vizRAF = 0; return; }             // 그릴 곳이 없으면 멈춤 (시간 · 가사는 timeupdate 로)
+  let e = 1;
+  if ((++vizTick & 1) === 0 || !playing) {             // 30fps 면 충분 (배터리)
+    if (playing) engine.analyser.getByteFrequencyData(fbuf);
+    e = 0; for (const v of vis) e += drawViz(v, !playing);
+  }
+  if (!playing && e < 0.05) { vizRAF = 0; for (const v of vis) drawViz(v, true); return; }
   vizRAF = requestAnimationFrame(vizLoop);
 }
 function startViz() { if (!vizRAF && !document.hidden) vizRAF = requestAnimationFrame(vizLoop); }
@@ -1643,11 +2363,13 @@ document.addEventListener('keydown', e => {
   if (openModal) { if (e.key === 'Escape') { e.preventDefault(); openModal(); } return; }   // 맨 위 창만 닫기 (대화상자 → 관리 창 순서)
   if (openMenuClose) return;                     // 메뉴가 열려 있으면 메뉴가 처리 (Esc 로 닫기)
   const tg = e.target;
+  if (tg.closest && tg.closest('input[type=text]') && e.key === 'Escape') { if (tg.id === 'searchInput') { toggleSearch(false); tg.blur(); } return; }
   if (tg.closest && (tg.closest('input[type=text], select, .vs, .menu') || (tg.matches('input[type=range]') && e.key.startsWith('Arrow')))) return;
-  if (e.key === 'Enter' && tg.closest && tg.closest('button')) return;
+  if (e.key === 'Enter' && tg.closest && tg.closest('button, [role=button]')) return;
   const a = engine.deck.a, ctrl = e.ctrlKey || e.metaKey;
   if (EDIT.on && e.key === 'Escape') { exitEdit(); return; }
   if (EDIT.on && e.key === 'Delete' && EDIT.sel.size) { if (DRAG) DRAG.cancel(); removeTracks(selectedIdx()); return; }
+  if (e.key === 'Escape') { if (PL.open) closePlayer(); else if (!$('searchBox').hidden) toggleSearch(false); else back(); return; }
   if (e.key === ' ') { e.preventDefault(); togglePlay(); }
   else if (e.key === 'ArrowRight' && ctrl) { e.preventDefault(); next(); }
   else if (e.key === 'ArrowLeft' && ctrl) { e.preventDefault(); prev(); }
@@ -1657,31 +2379,33 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowDown') { e.preventDefault(); S.volume = clamp(S.volume - 0.05, 0, 1); engine.setVolume(S.volume, S.muted); renderVolume(); saveSettings(); }
   else if (e.key.toLowerCase() === 'm' && !ctrl) { S.muted = !S.muted; engine.setVolume(S.volume, S.muted); renderVolume(); saveSettings(); }
   else if (e.key.toLowerCase() === 'o' && ctrl) { e.preventDefault(); pickFiles(); }
-  else if (e.key.toLowerCase() === 'f' && ctrl) { e.preventDefault(); if (EDIT.on) exitEdit(); const box = $('searchBox'); box.hidden = false; $('searchInput').focus(); }
+  else if (e.key.toLowerCase() === 'f' && ctrl) { e.preventDefault(); if (PL.open) closePlayer(); toggleSearch(true); }
+  else if (e.key.toLowerCase() === 'l' && ctrl) { e.preventDefault(); $('btnLyr').click(); }
 });
 // 버튼에 포커스가 있어도 스페이스는 '재생/일시정지'로만 동작하게
 document.addEventListener('keyup', e => { if (e.key === ' ' && !openModal && e.target.closest && e.target.closest('button') && !e.target.closest('.menu')) e.preventDefault(); }, true);
-const dropEl = el('div', { class: 'drop', hidden: true }, '여기에 놓으면 재생목록에 추가돼요');
+const dropEl = el('div', { class: 'drop', hidden: true }, '여기에 놓으면 플레이리스트에 추가돼요');
 document.body.append(dropEl);
 let dragDepth = 0;
 const hasFiles = e => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
-window.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; dropEl.hidden = false; });
+window.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; dropEl.textContent = `여기에 놓으면 '${target().name}'에 추가돼요`; dropEl.hidden = false; });
 window.addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
 window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; dropEl.hidden = true; } });
 window.addEventListener('drop', async e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; dropEl.hidden = true;
-  try { addItems(await platform.fromDrop(e.dataTransfer), { play: !isPlaying() }); } catch (err) { toast('파일을 추가하지 못했어요'); }
+  try { addItems(await platform.fromDrop(e.dataTransfer), { play: !isPlaying(), open: NAV.view !== 'list' }); } catch (err) { toast('파일을 추가하지 못했어요'); }
 });
+// 안드로이드 뒤로 가기: 맨 위에 열린 것부터 닫고, 홈이면 false (앱이 뒤로 감)
 window.__ullimBack = () => {
   if (openModal) { openModal(); return true; }
   if (openMenuClose) { openMenuClose(); return true; }
   if (EDIT.on) { exitEdit(); return true; }
-  if (!$('searchBox').hidden) { $('btnSearch').click(); return true; }
-  if (narrow() && S.tab !== 'list') { setTab('list'); return true; }
-  return false;
+  if (PL.open) { if (narrow() && PL.tab) setPlayerTab(null); else closePlayer(); return true; }
+  if (!$('searchBox').hidden) { toggleSearch(false); return true; }
+  return back();
 };
-const flush = () => { S.lastPos = P.index >= 0 ? engine.deck.a.currentTime || 0 : 0; store(LS.set, S); savePlaylists(); };
+const flush = () => { S.lastPos = P.index >= 0 ? engine.deck.a.currentTime || 0 : 0; store(LS.set, S); savePlaylists(); store(RECENT_KEY, recent); };
 window.addEventListener('pagehide', flush);
 window.addEventListener('beforeunload', flush);
 document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
@@ -1694,20 +2418,27 @@ window.addEventListener('keydown', wake, { once: true, capture: true });
 async function init() {
   const resumeKey = S.resume ? S.lastKey : null, resumePos = S.lastPos || 0;   // 시작 전에 기억해 둔다
   applyTheme();
-  renderTransport(); renderListTools(); refreshView(); renderFx(); renderEq(); renderSettings();
-  setTab(narrow() ? (S.tab || 'list') : (S.tab === 'list' ? 'fx' : S.tab));
+  setGlass(S.glass, narrow());
+  lens($('side')); lens($('pbar'), { light: true }); lens($('bnav'), { light: true });
+  watchPower(platform.powerSave);
+  renderTransport(); renderFx(); renderEq(); renderSettings();
+  go('home', { push: false });
   updateBadges();
   await engine.applyAll(S.fx, S.eq, !S.fxOn);
   if (!engine.workletOK) toast('이 기기에서는 일부 음장 효과를 쓸 수 없어요');
   if (resumeKey && P.index < 0) {   // 그사이 사용자가 다른 곡을 틀었으면 건드리지 않음
-    const i = list.findIndex(t => t.key === resumeKey);
+    let i = list.findIndex(t => t.key === resumeKey);
+    if (i < 0) {                     // 홈(최근 · 장르)에서 튼 곡이었으면 그 곡이 든 플레이리스트에서
+      const pl = pls.find(p => p.tracks.some(t => t.key === resumeKey));
+      if (pl) { playPl = pl; list = pl.tracks; order = []; i = list.findIndex(t => t.key === resumeKey); }
+    }
     if (i >= 0) await playIndex(i, { autoplay: false, startAt: resumePos });
   }
+  renderNowPlaying();
   queueMeta(list.filter(t => !t.tagged));
-  if (shown !== playPl) queueMeta(shown.tracks.filter(t => !t.tagged));
   if (platform.startupFiles) { try { const items = await platform.startupFiles(); if (items.length) addItems(items, { play: true }); } catch (e) { /* noop */ } }
   if (platform.ready) platform.ready();
-  drawViz(true);
+  VZ.forEach(v => drawViz(v, true));
   if (S.lyrShare) setTimeout(() => flushFeedback().catch(() => {}), 15000);   // 인터넷이 끊겨 못 보낸 가사 의견 다시 보내기
   if (S.lastVersion && S.lastVersion !== VERSION && isNewer(VERSION, S.lastVersion)) setTimeout(() => toast(`울림 ${VERSION}(으)로 업데이트했어요`), 1500);
   if (S.lastVersion !== VERSION) { S.lastVersion = VERSION; saveSettings(); if (platform.update && platform.update.cleanup) platform.update.cleanup(); }
@@ -1715,6 +2446,7 @@ async function init() {
     setTimeout(() => { if (S.autoUpdate) checkUpdate(); }, 12000);
     setInterval(() => { if (S.autoUpdate) checkUpdate(); }, 6 * 3600 * 1000);
   }
+  setTimeout(() => backfillGenres(), 4000);
 }
 
 /* ======================= 자동 업데이트 =======================
@@ -1783,7 +2515,7 @@ async function checkUpdate({ manual = false } = {}) {
     if (ANDROID_UPD()) {
       if (manual && S.updHidden === m.version) { S.updHidden = null; saveSettings(); }   // 직접 확인하면 숨겼던 알림도 다시
       UPD.state = 'available'; renderUpdate();
-      if (manual || S.updHidden !== m.version) toast(`새 버전 ${m.version}이(가) 나왔어요 — 목록 위 [받기]를 눌러 주세요`);
+      if (manual || S.updHidden !== m.version) toast(`새 버전 ${m.version}이(가) 나왔어요 — 화면 맨 위 [받기]를 눌러 주세요`);
       return;
     }
     UPD.state = 'downloading'; renderUpdate();
@@ -1800,5 +2532,6 @@ init();
 
 // 개발 · 테스트용
 window.__ullim = { engine, S, get list() { return list; }, get pls() { return pls; }, get shown() { return shown; }, get playPl() { return playPl; },
-  addItems, playIndex, playFromShown, applySoundPreset, setTab, P, showPlaylist, createPlaylist, renamePlaylist, deletePlaylist, duplicatePlaylist,
-  addTracksTo, removeTracks, moveTrack, enterEdit, exitEdit, toggleSel, managePlaylists, toM3U, importPlaylists, checkUpdate, UPD };
+  addItems, playIndex, playFromShown, applySoundPreset, go, back, P, NAV, PL, setTab: t => (t === 'list' ? showPlaylist(shown) : go(t)), showPlaylist, createPlaylist, renamePlaylist, deletePlaylist, duplicatePlaylist,
+  addTracksTo, removeTracks, moveTrack, enterEdit, exitEdit, toggleSel, managePlaylists, toM3U, importPlaylists, checkUpdate, UPD,
+  openPlayer, closePlayer, setPlayerTab, playIn, renderHome, recentPl, genrePl, allSongsPl, genreGroups, library, get recent() { return recent; }, toggleSearch, LY };

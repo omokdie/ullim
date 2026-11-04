@@ -102,6 +102,7 @@ function androidPlatform() {
     release: keys => { try { A.release(JSON.stringify(keys)); } catch (e) { /* noop */ } },
     exit: () => { try { A.exitApp(); } catch (e) { /* noop */ } },
     ready: () => { try { A.ready(); } catch (e) { /* noop */ } },
+    powerSave: () => { try { return !!A.powerSave(); } catch (e) { return false; } },
     // 새 버전 알림만 (받기 · 설치는 브라우저 → 안드로이드 설치 화면)
     update: {
       versionCode: () => { try { return Number(A.versionCode()) || 0; } catch (e) { return 0; } },

@@ -51,16 +51,36 @@ export function toLyrics(raw, source, extra = {}) {
 
 /* ---------- 검색어 만들기 ---------- */
 const stripExt = n => (n || '').replace(/\.[^.\\/]+$/, '');
+const nfc = s => String(s || '').normalize('NFC');      // macOS 파일 이름 · 태그의 풀어 쓴 한글(ㅂㅏㅁ…)을 모아 쓴 글자로
+const HANGUL = /[가-힣]/;
+// 유튜브 · 음원 파일 이름에 붙는 꼬리표: [MV] (Official Video) [가사/Lyrics] (Audio) 【4K】 등
+const TAGS_RE = /\s*[\[(【「]\s*(?:official|mv|m\/v|lyrics?|lyric\s*video|audio|video|visualizer|live\s*clip|special\s*clip|4k|hd|가사|가사\s*\/\s*lyrics|lyrics\s*\/\s*가사|뮤직\s*비디오|공식|full\s*audio|teaser)[^\])】」]*[\])】」]/gi;
+const TAIL_RE = /\s+(?:m\/v|mv|official|music\s+video|video|audio|lyrics?|lyric\s+video|live\s+clip|special\s+clip|가사|뮤비|뮤직\s*비디오)\s*$/i;
+/** 파일 이름 → { title, artist } ('가수 - 제목', '[MV] 가수(Artist) _ 제목', "가수 '제목' Live Clip", '가수-제목' 등) */
+function fromFileName(name) {
+  let n = stripExt(nfc(name).split(/[\\/]/).pop()).replace(/^\s*\d{1,3}\s*[.\-_)]\s*/, '');
+  n = n.replace(TAGS_RE, ' ').replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < 4 && TAIL_RE.test(n); i++) n = n.replace(TAIL_RE, '').trim();      // 'Official MV' 처럼 여러 개
+  const quoted = /^(.+?)\s*['‘’"“”「『](.+?)['‘’"“”」』]\s*(.*)$/.exec(n);      // 아이유 '밤편지' Live Clip
+  if (quoted && quoted[1].length <= 40) return { artist: quoted[1].replace(/[_\s]+$/, '').trim(), title: quoted[2].trim(), swap: false };
+  let parts = n.split(/\s+[-–—|]\s+|\s+_\s+/);
+  if (parts.length < 2) {
+    const m = /^([^-]*[가-힣][^-]*?)\s*-\s*(.+)$/.exec(n) || /^([^-]+?)\s*-\s*([^-]*[가-힣].*)$/.exec(n);   // 아이유-밤편지 (한글 쪽이 있을 때만)
+    if (m) parts = [m[1], m[2]];
+  }
+  const clean = x => x.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  if (parts.length >= 2) return { artist: clean(parts[0]), title: clean(parts.slice(1).join(' - ')), swap: true };
+  return { artist: '', title: clean(n), swap: false };
+}
 export function guessQuery(t) {
-  let title = (t.title || '').trim(), artist = (t.artist || '').trim(), swap = false;
+  let title = nfc(t.title).trim(), artist = nfc(t.artist).trim(), swap = false;
   if (!title) {
-    let n = stripExt((t.name || '').split(/[\\/]/).pop()).replace(/^\s*\d{1,3}\s*[.\-_)]\s*/, '').replace(/_/g, ' ');
-    const parts = n.split(/\s+-\s+/);
-    if (parts.length >= 2) { if (!artist) { artist = parts[0].trim(); swap = true; } title = parts.slice(1).join(' - ').trim(); }
-    else title = n.trim();
+    const f = fromFileName(t.name || '');
+    title = f.title;
+    if (!artist && f.artist) { artist = f.artist; swap = f.swap; }
   }
   title = title.replace(/\s*[(\[](official|mv|m\/v|lyrics?|audio|video|live|가사|뮤직\s*비디오|공식)[^)\]]*[)\]]/gi, '').trim();
-  const q = { title, artist, album: (t.album || '').trim() };
+  const q = { title, artist, album: nfc(t.album).trim() };
   if (swap) Object.defineProperty(q, 'swap', { value: true });   // '제목 - 가수.mp3' 일 수도 있음 (열쇠 · 저장에는 안 들어감)
   return q;
 }
@@ -92,6 +112,12 @@ const ALIAS = new Map();
 for (const group of ARTIST_ALIASES) {
   const keys = group.map(x => flat(x.normalize('NFKC').toLowerCase())).filter(Boolean);
   for (const k of keys) ALIAS.set(k, keys);
+}
+/** 같은 가수의 다른 표기 전부 (예: 악뮤 → AKMU, 악동뮤지션, Akdong Musician) */
+function aliasGroup(artist) {
+  const k = flat((artist || '').normalize('NFKC').toLowerCase());
+  const g = ARTIST_ALIASES.find(group => group.some(x => flat(x.normalize('NFKC').toLowerCase()) === k));
+  return g ? g.filter(x => flat(x.normalize('NFKC').toLowerCase()) !== k) : [];
 }
 /** 검색에 써 볼 다른 표기 (예: 아이유 → IU) */
 function aliasOf(artist) {
@@ -221,6 +247,127 @@ export async function searchList(q, opt = {}) {
   return [...seen.values()].map(r => ({ r, s: score(r, q, 0) })).sort((a, b) => b.s - a.s).map(x => x.r).slice(0, 20);
 }
 
+/* ---------- 영어 제목으로만 올라간 한국 노래 ----------
+   LRCLIB 에는 '벚꽃 엔딩' 이 'Cherry Blossom Ending' 으로만 있는 것처럼 영어 제목만 있는 곡이 있다.
+   제목으로 못 찾았고 곡 길이를 알면: 가수(다른 표기 포함)로 검색해 길이가 2초 안인 곡 중
+   가사 속에 우리 제목의 한글 낱말이 절반 이상 들어 있는 것만 받아들인다 (같은 가수의 다른 곡을 고르지 않도록) */
+const plainName = x => (x || '').replace(/\(.*?\)|\[.*?\]/g, ' ').replace(/\s+/g, ' ').trim();
+// 가사에 흔히 나오는 낱말은 '이 곡이 맞다'는 증거가 못 된다 (예: '내 사람' 의 '사람' 은 다른 곡 가사에도 흔함)
+const COMMON = new Set(('사랑 사람 우리 그대 당신 너를 나를 너의 나의 내가 네가 너와 나와 우린 오늘 내일 어제 마음 하루 시간 눈물 이별 기억 ' +
+  '다시 모든 그리고 하지만 그냥 정말 너무 아직 이제 지금 언제 어디 노래 행복 세상 처음 마지막 영원 순간 그날 함께 혼자 바람 하늘 ' +
+  '거리 사랑해 안녕 미안 고마워 좋아 그대여 사랑아 이야기 추억 마음이 사랑이 사람이 우리의 그녀 소녀 소년 친구 밤에 오늘밤 ' +
+  '내게 너에게 나에게 그대에게 사랑을 사람을 마음을 눈을 너만 나만 그대만 날을 별이 꽃이 꿈을 꿈이 웃음 미소').split(' '));
+function titleWords(title) {
+  return [...new Set(plainName(nfc(title)).split(/\s+/).map(w => w.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase())
+    .filter(w => w.length >= 2 && HANGUL.test(w) && !COMMON.has(w)))];
+}
+const lyricText = r => nfc(r.syncedLyrics || r.plainLyrics || '').toLowerCase().replace(STAMP, '').replace(/[^\p{L}\p{N}]+/gu, '');
+export function lyricsMentionTitle(r, title) {
+  const w = titleWords(title);
+  if (!w.length) return false;
+  const text = lyricText(r);
+  return w.filter(x => text.includes(x)).length / w.length >= 0.5;
+}
+/* 한글 제목이 영어 제목을 소리 나는 대로 적은 것인지 (바운스 ↔ Bounce, 러브 다이브 ↔ Love Dive, 넥스트 레벨 ↔ Next Level)
+   양쪽을 자음 소리 갈래(K T P S J N M R H)로 줄여 비교한다. 가수 · 곡 길이가 맞을 때만 쓰므로 거칠게 맞춰도 된다 */
+const CHO = ['K', 'K', 'N', 'T', 'T', 'R', 'M', 'P', 'P', 'S', 'S', '', 'J', 'J', 'J', 'K', 'T', 'P', 'H'];
+const JONG = ['', 'K', 'K', 'KS', 'N', 'NJ', 'N', 'T', 'R', 'RK', 'RM', 'RP', 'RS', 'RT', 'RP', 'R', 'M', 'P', 'PS', 'T', 'T', 'N', 'T', 'T', 'K', 'T', 'P', 'T'];
+const squeeze = x => x.replace(/(.)\1+/g, '$1');
+export function soundKo(s) {
+  let out = '';
+  for (const ch of nfc(s)) {
+    const c = ch.codePointAt(0) - 0xac00;
+    if (c < 0 || c > 11171) continue;
+    out += CHO[Math.floor(c / 588)] + JONG[c % 28];
+  }
+  return squeeze(out);
+}
+export function soundEn(s) {
+  let w = String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+  w = w.replace(/gh/g, '').replace(/[ts]ion/g, 'sn').replace(/ph/g, 'f').replace(/ck/g, 'k').replace(/qu/g, 'k').replace(/sch/g, 's').replace(/ch|tch/g, 'j')
+    .replace(/sh/g, 's').replace(/th/g, 's').replace(/ng\b|ng(?=[^aeiouy])/g, 'n').replace(/c(?=[eiy])/g, 's').replace(/g(?=[eiy])/g, 'j').replace(/x/g, 'ks');
+  const map = { b: 'P', p: 'P', f: 'P', v: 'P', d: 'T', t: 'T', g: 'K', k: 'K', c: 'K', q: 'K', s: 'S', z: 'J', j: 'J', n: 'N', m: 'M', l: 'R', r: 'R', h: 'H' };
+  let out = '';
+  for (const ch of w) out += map[ch] || '';
+  return squeeze(out);
+}
+function soundDist(a, b) {
+  const cost = (x, y) => x === y ? 0 : (x + y === 'ST' || x + y === 'TS' || x + y === 'SJ' || x + y === 'JS') ? 0.5 : 1;
+  const del = x => (x === 'R' || x === 'H') ? 0.4 : 1;
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i ? d0(a, i, del) : 0]);
+  function d0(str, i, f) { let t = 0; for (let k = 0; k < i; k++) t += f(str[k]); return t; }
+  for (let j = 1; j <= b.length; j++) d[0][j] = d[0][j - 1] + del(b[j - 1]);
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i - 1][j] + del(a[i - 1]), d[i][j - 1] + del(b[j - 1]), d[i - 1][j - 1] + cost(a[i - 1], b[j - 1]));
+  return d[a.length][b.length];
+}
+export { titleKeywords };
+export function soundAlike(ko, en) {
+  if (!HANGUL.test(ko || '') || /[가-힣]/.test(plainName(en) || '') || !/[a-z]/i.test(en || '')) return false;
+  const a = soundKo(plainName(ko)), b = soundEn(plainName(en));
+  if (a.length < 3 || b.length < 3) return false;
+  return soundDist(a, b) <= Math.max(0.6, 0.15 * Math.max(a.length, b.length));
+}
+/* 제목이 영어로 번역되어 올라간 곡 (봄이 좋냐?? ↔ What The Spring??) — 많은 곡을 낸 가수는 이름만으로 찾으면
+   결과 20개 안에 안 들어오므로, 제목의 흔한 낱말을 영어로 바꿔 '가수 + 낱말' 로도 찾는다 (받아들이는 기준은 그대로) */
+const KO_EN = new Map(('봄:spring 여름:summer 가을:autumn 겨울:winter 밤:night 낮:day 아침:morning 저녁:evening 새벽:dawn 하늘:sky 바다:sea ' +
+  '비:rain 눈:snow 바람:wind 별:star 달:moon 해:sun 꽃:flower 벚꽃:cherry 사랑:love 이별:goodbye 안녕:hello 꿈:dream 노래:song ' +
+  '친구:friend 시간:time 기억:memory 추억:memories 눈물:tears 마음:heart 집:home 길:road 불꽃:fireworks 비밀:secret 첫사랑:first 마지막:last ' +
+  '행복:happy 세상:world 오늘:today 내일:tomorrow 어제:yesterday 하루:day 영원:forever 천국:heaven 우주:universe 여행:trip 편지:letter ' +
+  '거짓말:lie 바보:fool 소원:wish 약속:promise 운명:destiny 고백:confession 그림자:shadow 빛:light 불:fire 물:water 숲:forest 섬:island ' +
+  '도시:city 거리:street 창문:window 우산:umbrella 커피:coffee 장미:rose 나비:butterfly 고양이:cat 강아지:puppy 인형:doll 선물:gift ' +
+  '생일:birthday 축제:festival 춤:dance 파도:waves 노을:sunset 은하수:galaxy 무지개:rainbow 첫눈:snow 크리스마스:christmas 자장가:lullaby ' +
+  '엄마:mom 아빠:dad 어머니:mother 아버지:father 청춘:youth 소년:boy 소녀:girl 왕:king 여왕:queen 천사:angel 악마:devil 괴물:monster ' +
+  '좋아:like 미안:sorry 고마워:thanks 보고싶다:miss 그리움:longing 외로움:lonely 혼자:alone 위로:comfort 응원:cheer 자유:freedom').split(' ').map(x => x.split(':')));
+const PARTICLE = /(?:이|가|은|는|을|를|의|에|도|만|야|아|여|요|로|와|과)$/;
+function titleKeywords(title) {
+  const out = [];
+  for (const w0 of plainName(nfc(title)).split(/\s+/)) {
+    const w = w0.replace(/[^\p{L}\p{N}]/gu, '');
+    const en = KO_EN.get(w) || (w.length >= 2 && PARTICLE.test(w) ? KO_EN.get(w.slice(0, -1)) : null);
+    if (en && !out.includes(en)) out.push(en);
+  }
+  return out.slice(0, 2);
+}
+async function scanByArtist(q, dur, bad, ctx, seen) {
+  if (!(dur >= 30) || !q.artist || !HANGUL.test(q.title || '') || (!titleWords(q.title).length && soundKo(plainName(q.title)).length < 3)) return null;
+  const album = plainName(q.album);
+  // 가수 이름: 괄호 밖 · 안 ('츄 (CHUU)'), 다른 표기, 제목 속 피처링 가수 ('… feat KIXO' → KIXO 로도 찾음)
+  const inParens = x => [...String(x || '').matchAll(/[(\[]([^)\]]+)[)\]]/g)].map(m => m[1].trim());
+  const feats = [...String(q.title || '').matchAll(/(?:^|[\s(\[])(?:feat\.?|ft\.?|featuring|with)\s+([^)\]]+)/gi)]
+    .flatMap(m => m[1].split(/\s*(?:,|&|\/|\sx\s|\sand\s)\s*/)).map(x => x.trim()).filter(x => x.length >= 2);
+  const who = new Set();
+  for (const n of [plainName(q.artist) || q.artist, ...inParens(q.artist), ...feats]) { if (!n) continue; who.add(n); for (const al of aliasGroup(n)) who.add(al); }
+  const plans = [], first = [...who][0];
+  plans.push({ q: first });
+  for (const k of titleKeywords(q.title)) plans.push({ q: `${first} ${k}` });
+  if (album) plans.push({ q: `${first} ${album}` });
+  for (const a of [...who].slice(1)) { plans.push({ q: a }); if (album) plans.push({ q: `${a} ${album}` }); }
+  const qa = names(q.artist, true);
+  const featNames = feats.flatMap(f => names(f, true));
+  const featHit = x => featNames.length && nameMatch(names(`${x.trackName || ''} ${x.artistName || ''}`.replace(/[()[\]]/g, ' '), true).concat(names(x.artistName, true)), featNames) >= 1;
+  let top = null, songs = new Set();
+  const pick = () => {
+    top = null; songs = new Set();
+    for (const x of seen.values()) {
+      if (bad.has(Number(x.id)) || !(x.syncedLyrics || x.plainLyrics)) continue;
+      const d = Math.abs((x.duration || 0) - dur);
+      if (d > 2 || (nameMatch(names(x.artistName, true), qa) < 1 && !featHit(x)) || !(soundAlike(q.title, x.trackName) || lyricsMentionTitle(x, q.title))) continue;
+      songs.add(flat((x.trackName || '').normalize('NFKC').toLowerCase().replace(/\(.*?\)|\[.*?\]/g, '')));
+      const sc = (x.syncedLyrics ? 3 : 1) + (2 - d);
+      if (!top || sc > top.s) top = { r: x, s: sc };
+    }
+  };
+  pick();
+  for (const p of plans.slice(0, 6)) {
+    if (top && top.r.syncedLyrics) break;
+    const r = await request(`${API}/search?${new URLSearchParams(p)}`, ctx);
+    if (r.status === 200) for (const x of json(r.body) || []) if (x && x.id && !seen.has(x.id)) seen.set(x.id, x);
+    pick();
+  }
+  return top && songs.size === 1 ? fromRecord(top.r) : null;   // 서로 다른 두 곡이 걸리면 어느 쪽인지 모르니 고르지 않음
+}
+
 /** 가장 잘 맞는 가사 하나 (자동 찾기용). avoid: 사용자들이 '틀렸다'고 알린 LRCLIB 번호.
     못 찾았는데 중간에 서버가 붐볐거나 연결이 끊겼으면 LookupError 를 던진다 (→ '없음'으로 기억하지 않음) */
 export async function findOnline(q, dur, avoid = [], opt = {}) {
@@ -245,6 +392,8 @@ export async function findOnline(q, dur, avoid = [], opt = {}) {
   }
   const top = best(seen.values(), q, dur, bad);
   if (top) return fromRecord(top.r, top.plainOnly);
+  const scanned = await scanByArtist(q, dur, bad, ctx, seen);
+  if (scanned) return scanned;
   if (ctx.busy || ctx.offline) throw new LookupError(failKind(ctx));
   return null;
 }

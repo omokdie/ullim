@@ -43,6 +43,9 @@ python3 test/ui_func.py                        # 화면 동작
 python3 test/lyrics_test.py                    # 가사 찾기 (LRCLIB 가짜 응답)
 python3 test/lyrics_share_test.py              # 공용 가사 목록 · 자동 의견 보내기 (가짜 응답)
 python3 test/lyrics_retry_test.py              # 가사 서버가 붐빌 때(503/429) 다시 묻기 · 괄호 이름 · 가수 별칭 · 받아들일지 규칙
+python3 test/lyrics_korean_test.py             # 한국 노래: 영어 번역/소리 제목 · 피처링 가수 · 흔한 낱말만 겹치면 안 고름 · 파일 이름
+node test/autosync_test.mjs                    # 자동 싱크 (글자 수 · 머리말 · 맞춘 줄 · 합성 신호 정렬 · 속도)
+node test/autosync_bench.mjs                   # (선택) 자동 싱크 정확도 — JamendoLyrics 79곡이 /home/claude/f90/jamendolyrics 에 있을 때
 python3 test/playlists_test.py                 # 플레이리스트 여러 개 (가짜 안드로이드 연결층 · 저장 · 파일 권한)
 python3 .github/scripts/lyrics_feedback.py selftest
 python3 test/lyrics_bot_test.py                # 가사 봇 전체 흐름 (가짜 GitHub · LRCLIB · ntfy)

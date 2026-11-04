@@ -172,6 +172,14 @@ public class MainActivity extends Activity {
                 return (int) (Build.VERSION.SDK_INT >= 28 ? p.getLongVersionCode() : p.versionCode);
             } catch (Exception e) { return 0; }
         }
+        /** 배터리 절약 모드면 유리 효과(흐림 · 굴절)를 끈다 — 권한 필요 없음 */
+        @JavascriptInterface
+        public boolean powerSave() {
+            try {
+                android.os.PowerManager pm = (android.os.PowerManager) a.getSystemService(android.content.Context.POWER_SERVICE);
+                return pm != null && pm.isPowerSaveMode();
+            } catch (Exception e) { return false; }
+        }
         @JavascriptInterface
         public void exitApp() {
             a.main.post(() -> { PlaybackService.stop(a); a.finishAndRemoveTask(); });

@@ -37,9 +37,16 @@ with sync_playwright() as p:
     S = lambda: pg.evaluate("""() => { const U = __ullim; return {
         pls: U.pls.map(p => `${p.name}:${p.tracks.length}`), shown: U.shown.name, playing: U.playPl.name, idx: U.P.index,
         cur: U.list[U.P.index] ? U.list[U.P.index].name : null, same: U.list === U.playPl.tracks,
-        head: document.getElementById('plName').textContent, now: document.getElementById('plNow').hidden ? '' : document.getElementById('plNow').textContent,
+        view: __ullim.NAV.view, head: (document.querySelector('#plHero .hname') || {}).textContent || '', now: document.getElementById('plNow').hidden ? '' : document.getElementById('plNow').textContent,
         rows: [...document.querySelectorAll('#spacer .row')].map(r => (r.classList.contains('cur') ? '*' : '') + r.querySelector('.t1').textContent) }; }""")
     menu = lambda text: pg.click(f'.menu button:has-text("{text}")')
+    # 왼쪽 메뉴의 플레이리스트 (이름이 정확히 같은 것)
+    openpl = lambda name: (pg.click(f'.spl:has(.nm:text-is("{name}"))'), pg.wait_for_timeout(250))
+
+    # 0) 처음에는 홈: 플레이리스트 타일 · 왼쪽 목록
+    R['0_home'] = pg.evaluate("({view: __ullim.NAV.view, tiles: [...document.querySelectorAll('#viewHome .ptile .nm')].map(e => e.textContent), side: [...document.querySelectorAll('.spl .nm')].map(e => e.textContent)})")
+    assert R['0_home'] == {'view': 'home', 'tiles': ['재생목록', '새 플레이리스트'], 'side': ['재생목록']}, R['0_home']
+    pg.click('#viewHome .ptile[data-pl]'); pg.wait_for_timeout(300)
 
     # 1) 1.0.x 재생목록 → '재생목록' 플레이리스트로 옮겨짐
     R['1_migrated'] = S()
@@ -47,7 +54,7 @@ with sync_playwright() as p:
 
     # 2) 곡 재생 → 새 플레이리스트 만들기 (위 이름 단추 메뉴)
     pg.click('#spacer .row[data-i="0"]'); pg.wait_for_timeout(700)
-    pg.click('#plBtn'); menu('새 플레이리스트 만들기')
+    pg.click('#sideNew')
     pg.fill('.dialog input', '출퇴근'); pg.click('.dialog .primary'); pg.wait_for_timeout(300)
     R['2_created'] = {**S(), 'empty': pg.text_content('#empty')}
     s2 = R['2_created']
@@ -64,7 +71,7 @@ with sync_playwright() as p:
     assert R['4_added_one'] == ['재생목록:5', '출퇴근:1'], R['4_added_one']
 
     # 5) 편집: 여러 곡 골라 넣기 (이미 있는 곡은 건너뜀)
-    pg.click('#btnListMenu'); menu('편집')
+    pg.click('#plMenu'); menu('편집')
     for i in (1, 2, 3): pg.click(f'#spacer .row[data-i="{i}"]')
     R['5_editbar'] = pg.text_content('#editBar')
     pg.click('#editBar button:has-text("플레이리스트에 넣기")'); menu('출퇴근'); pg.wait_for_timeout(200)
@@ -84,31 +91,32 @@ with sync_playwright() as p:
     assert pg.evaluate("document.getElementById('editBar').hidden")
 
     # 7) 다른 목록을 보다가 거기서 곡을 누르면 재생 목록이 그쪽으로 바뀜
-    pg.click('#plBtn'); menu('출퇴근'); pg.wait_for_timeout(200)
+    openpl('출퇴근')
     assert all(not r.startswith('*') for r in S()['rows']), S()
     pg.click('#spacer .row[data-i="0"]'); pg.wait_for_timeout(700)
     R['7_switched'] = S()
     assert R['7_switched']['playing'] == '출퇴근' and R['7_switched']['same'] and R['7_switched']['rows'][0].startswith('*') and R['7_switched']['now'] == '', R['7_switched']
 
     # 8) 안드로이드 파일 권한: 다른 목록에도 있는 곡은 빼도 권한을 돌려주지 않음
-    pg.click('#btnListMenu'); menu('편집'); pg.click('#editBar button:has-text("모두 선택")'); pg.click('#editBar button:has-text("빼기")'); pg.wait_for_timeout(500)
+    pg.click('#plMenu'); menu('편집'); pg.click('#editBar button:has-text("모두 선택")'); pg.click('#editBar button:has-text("빼기")'); pg.wait_for_timeout(500)
     R['8_removed_all'] = {**S(), 'released': pg.evaluate('__released.slice()')}
     assert R['8_removed_all']['pls'] == ['재생목록:5', '출퇴근:0'] and R['8_removed_all']['released'] == [] and R['8_removed_all']['idx'] == -1, R['8_removed_all']
-    pg.click('#plBtn'); menu('재생목록'); pg.wait_for_timeout(200)
+    openpl('재생목록')
     pg.hover('#spacer .row[data-i="4"]'); pg.click('#spacer .row[data-i="4"] .x'); menu('이 목록에서 빼기'); pg.wait_for_timeout(200)
     R['8_released_only_here'] = pg.evaluate('__released.slice()')
     assert len(R['8_released_only_here']) == 1 and R['8_released_only_here'][0].endswith(FILES[4]), R['8_released_only_here']
 
     # 9) 이름 바꾸기 · 복사
-    pg.click('#plBtn'); menu('출퇴근'); pg.wait_for_timeout(100)
-    pg.click('#btnListMenu'); menu('이름 바꾸기'); pg.fill('.dialog input', '출근길'); pg.click('.dialog .primary'); pg.wait_for_timeout(200)
-    pg.click('#plBtn'); menu('재생목록'); pg.wait_for_timeout(100)
-    pg.click('#btnListMenu'); menu('복사해서 새 플레이리스트로'); pg.wait_for_timeout(200)
+    openpl('출퇴근')
+    pg.click('#plMenu'); menu('이름 바꾸기'); pg.fill('.dialog input', '출근길'); pg.click('.dialog .primary'); pg.wait_for_timeout(200)
+    assert pg.text_content('#plHero .hname') == '출근길' and pg.text_content('#tbTitle') == '출근길'
+    openpl('재생목록')
+    pg.click('#plMenu'); menu('복사해서 새 플레이리스트로'); pg.wait_for_timeout(200)
     R['9_renamed_copied'] = S()
     assert R['9_renamed_copied']['pls'] == ['재생목록:4', '재생목록 복사본:4', '출근길:0'] and R['9_renamed_copied']['shown'] == '재생목록 복사본', R['9_renamed_copied']
 
     # 10) 관리 창: 위로 옮기기 · 지우기
-    pg.click('#btnListMenu'); menu('플레이리스트 관리'); pg.wait_for_timeout(200)
+    pg.click('#plMenu'); menu('플레이리스트 관리'); pg.wait_for_timeout(200)
     R['10_rows'] = pg.eval_on_selector_all('.plrow .nm', 'e => e.map(x => x.textContent)')
     pg.click('.plrow:nth-child(3) button[title="위로"]'); pg.wait_for_timeout(100)
     R['10_after_up'] = pg.eval_on_selector_all('.plrow .nm', 'e => e.map(x => x.textContent)')
@@ -120,24 +128,28 @@ with sync_playwright() as p:
     assert pg.evaluate('__released.length') == 1          # 복사본 곡은 원래 목록에도 있으니 권한 유지
 
     # 11) 다시 열어도 그대로 (이름 · 순서 · 곡 · 보던 목록 · 재생하던 목록)
-    pg.click('#plBtn'); menu('재생목록'); pg.wait_for_timeout(100)
+    openpl('재생목록')
     pg.click('#spacer .row[data-i="1"]'); pg.wait_for_timeout(600)
-    pg.click('#plBtn'); menu('출근길'); pg.wait_for_timeout(300)
+    openpl('출근길'); pg.wait_for_timeout(100)
     before = S()
     pg.reload(); pg.wait_for_function('window.__ullim && window.__readyCalled'); pg.wait_for_timeout(800)
+    assert pg.evaluate('__ullim.NAV.view') == 'home'
+    pg.evaluate("__ullim.setTab('list')"); pg.wait_for_timeout(300)        # 마지막으로 보던 목록
     R['11_reloaded'] = {'before': before, 'after': S()}
     a = R['11_reloaded']['after']
     assert a['pls'] == before['pls'] and a['shown'] == '출근길' and a['playing'] == '재생목록' and a['cur'] == before['cur'] and "'재생목록'에서 재생 중" in a['now'], R['11_reloaded']
     assert pg.evaluate("JSON.parse(localStorage.getItem('ullim.playlists.v2')).v") == 2
 
     # 12) 재생 중인 플레이리스트를 지우면 멈추고 다른 목록으로
-    pg.click('#plBtn'); menu('재생목록'); pg.wait_for_timeout(100)
-    pg.click('#btnListMenu'); menu('이 플레이리스트 삭제'); pg.click('.dialog .primary'); pg.wait_for_timeout(300)
+    openpl('재생목록')
+    pg.click('#plMenu'); menu('이 플레이리스트 삭제'); pg.click('.dialog .primary'); pg.wait_for_timeout(300)
+    assert pg.evaluate('__ullim.NAV.view') == 'home'                       # 보던 목록을 지우면 홈으로
+    openpl('출근길')
     R['12_deleted_playing'] = {**S(), 'released': pg.evaluate('__released.length')}
     d = R['12_deleted_playing']
     assert d['pls'] == ['출근길:0'] and d['idx'] == -1 and d['playing'] == '출근길' and d['shown'] == '출근길' and d['released'] == 4 and d['rows'] == [], d   # 다시 열어서 셈이 새로 시작됨: 지운 목록의 4곡
     # 마지막 하나는 지울 수 없음
-    pg.click('#btnListMenu')
+    pg.click('#plMenu')
     R['12_menu_last'] = pg.eval_on_selector_all('.menu button', 'e => e.map(x => x.textContent)')
     assert not any('삭제' in x for x in R['12_menu_last']), R['12_menu_last']
     pg.keyboard.press('Escape'); pg.wait_for_timeout(100)
@@ -151,13 +163,14 @@ with sync_playwright() as p:
     # 14) 휴대폰 화면: 이름 단추 · 편집 막대
     pg.set_viewport_size({'width': 390, 'height': 844}); pg.wait_for_timeout(500)   # 화면 크기가 바뀐 뒤 자리 잡을 때까지
     pg.evaluate("__ullim.setTab('list')"); pg.wait_for_timeout(300)
-    pg.click('#btnListMenu')
+    pg.click('#plMenu')
     menu('편집'); pg.click('#spacer .row[data-i="0"]'); pg.wait_for_timeout(200)
     pg.screenshot(path='/home/claude/ullim/test/shots/playlists-mobile-edit.png')
     pg.click('#editBar button:has-text("완료")')
-    pg.click('#plBtn'); pg.wait_for_timeout(200)
-    pg.screenshot(path='/home/claude/ullim/test/shots/playlists-mobile-menu.png')
-    pg.keyboard.press('Escape')
+    pg.click('#btnBack'); pg.wait_for_timeout(300)
+    R['14_back_home'] = pg.evaluate('__ullim.NAV.view')
+    assert R['14_back_home'] == 'home'
+    pg.screenshot(path='/home/claude/ullim/test/shots/playlists-mobile-home.png')
     R['errors'] = errs
     b.close()
 

@@ -200,9 +200,9 @@ if __name__ == '__main__':
         'InternalName': 'Ullim',
         'OriginalFilename': 'Ullim.exe',
         'LegalCopyright': '울림 · Electron(MIT) 기반',
-        'FileVersion': '1.1.1',
-        'ProductVersion': '1.1.1',
-    }, numeric=(1, 1, 1, 0))
+        'FileVersion': '1.2.0',
+        'ProductVersion': '1.2.0',
+    }, numeric=(1, 2, 0, 0))
     pe.checksum()
     open(exe, 'wb').write(pe.d)
     print('patched icons:', n)

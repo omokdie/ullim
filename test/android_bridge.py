@@ -40,7 +40,9 @@ with sync_playwright() as p:
     pg.wait_for_function('window.__ullim && window.__readyCalled')
     R['platform_bars'] = pg.evaluate('window.__bars')
     # "기기 음악 불러오기" button
-    pg.click('#listTools button:has-text("기기 음악")'); time.sleep(2.5)
+    R['home_first'] = pg.evaluate('__ullim.NAV.view')
+    pg.click('#viewHome .welcome button:has-text("기기 음악")'); time.sleep(2.5)
+    R['view_after_scan'] = pg.evaluate('__ullim.NAV.view')
     R['after_scan'] = pg.evaluate('({n: __ullim.list.length, i: __ullim.P.index, playing: !__ullim.engine.deck.a.paused, src: __ullim.engine.deck.a.src.slice(0, 70)})')
     time.sleep(1.5)
     np = pg.evaluate('__np')
@@ -48,10 +50,10 @@ with sync_playwright() as p:
     R['nowPlaying_last'] = {k: (v[:40] + '…' if isinstance(v, str) and len(v) > 40 else v) for k, v in np[-1].items()}
     R['nowPlaying_has_art'] = any(isinstance(x.get('art'), str) and x['art'].startswith('data:image/jpeg') for x in np)
     # pick files (adds 2)
-    pg.click('#listTools button:has-text("파일 추가")'); time.sleep(1.5)
+    pg.click('#plAdd'); pg.click('.menu button:has-text("파일 추가")'); time.sleep(1.5)
     R['after_pick'] = pg.evaluate('__ullim.list.map(t => t.title || t.name)')
     # folder error path shows toast
-    pg.click('#listTools button:has-text("폴더 추가")'); time.sleep(0.4)
+    pg.click('#plAdd'); pg.click('.menu button:has-text("폴더 추가")'); time.sleep(0.4)
     R['folder_toast'] = pg.evaluate("document.getElementById('toast').textContent")
     # commands from notification / headset
     pg.evaluate("__ullimCommand('pause')"); time.sleep(0.3)
@@ -63,15 +65,20 @@ with sync_playwright() as p:
     pg.evaluate("__ullimCommand('next')"); time.sleep(1.0)
     R['cmd_next_index'] = pg.evaluate('__ullim.P.index')
     # back button behaviour
+    R['back_from_list'] = pg.evaluate('__ullimBack()')
+    R['view_after_back1'] = pg.evaluate('__ullim.NAV.view')
     pg.evaluate("__ullim.setTab('fx')")
     R['back_from_fx'] = pg.evaluate('__ullimBack()')
-    R['tab_after_back'] = pg.evaluate('__ullim.S.tab')
-    R['back_on_list'] = pg.evaluate('__ullimBack()')
+    R['view_after_back2'] = pg.evaluate('__ullim.NAV.view')
+    pg.evaluate('__ullim.openPlayer("lyr")'); time.sleep(0.5)
+    R['back_player_tab'] = [pg.evaluate('__ullimBack()'), pg.evaluate('__ullim.PL.open'), pg.evaluate('__ullim.PL.tab')]
+    R['back_player_close'] = [pg.evaluate('__ullimBack()'), pg.evaluate('__ullim.PL.open')]
+    R['back_on_home'] = pg.evaluate('__ullimBack()')
     # open-with intent
     pg.evaluate("__ullimOpen(JSON.stringify([{key: '%s', name: 'song.wav'}]))" % (M + 'song.wav')); time.sleep(1.2)
     R['open_with'] = pg.evaluate("document.getElementById('title').textContent")
     # light theme -> status bar color
-    pg.evaluate("document.querySelector('.btabs button[data-tab=set]').click()"); time.sleep(0.3)
+    pg.evaluate("document.querySelector('.bnav button[data-go=set]').click()"); time.sleep(0.3)
     pg.click('#paneSet .seg button:has-text("밝게")'); time.sleep(0.3)
     R['bars_light'] = pg.evaluate('window.__bars')
     pg.screenshot(path='/home/claude/ullim/test/shots/android-sim-settings.png')

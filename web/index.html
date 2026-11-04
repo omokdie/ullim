@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko" data-theme="dark" data-accent="blue">
+<html lang="ko" data-theme="dark" data-accent="blue" data-glass="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
@@ -9,69 +9,120 @@
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<div class="app" id="app" data-tab="fx">
-  <header class="player card">
-    <div class="art" id="art"><span class="i" data-icon="note"></span><img id="artImg" alt="" hidden></div>
-    <div class="meta">
-      <div class="title" id="title">재생할 음악을 추가하세요</div>
-      <div class="sub" id="sub">파일이나 폴더를 열거나, 창에 끌어다 놓으세요</div>
+<!-- 리퀴드 글라스 굴절 필터 (요소 크기에 맞춰 js/glass.js 가 채움) -->
+<svg class="lgdefs" id="lgDefs" aria-hidden="true" width="0" height="0"><defs></defs></svg>
+<div class="ambient" id="ambient" aria-hidden="true"></div>
+
+<div class="app" id="app" data-view="home">
+  <!-- 넓은 화면: 왼쪽 메뉴 -->
+  <aside class="side glass lens" id="side">
+    <div class="brand"><img src="img/icon.png" alt=""><b>울림</b></div>
+    <nav class="snav">
+      <button data-go="home"><span class="i" data-icon="home"></span><span>홈</span></button>
+      <button data-go="fx"><span class="i" data-icon="fx"></span><span>음장 효과</span><span class="badge" id="fxBadge" hidden></span></button>
+      <button data-go="eq"><span class="i" data-icon="eq"></span><span>이퀄라이저</span></button>
+      <button data-go="lyr"><span class="i" data-icon="lyrics"></span><span>가사</span></button>
+      <button data-go="set"><span class="i" data-icon="gear"></span><span>설정</span></button>
+    </nav>
+    <div class="side-h"><span>플레이리스트</span><button class="ib sm" id="sideNew" title="새 플레이리스트" aria-label="새 플레이리스트"></button></div>
+    <div class="side-pls" id="sidePls"></div>
+  </aside>
+
+  <main class="main" id="main">
+    <header class="topbar" id="topbar">
+      <button class="ib" id="btnBack" title="뒤로" aria-label="뒤로" hidden></button>
+      <div class="brand m" id="brandM"><img src="img/icon.png" alt=""><b>울림</b></div>
+      <div class="tbtitle" id="tbTitle"></div>
+      <span class="sp"></span>
+      <button class="ib" id="btnAdd" title="음악 추가" aria-label="음악 추가"></button>
+      <button class="ib" id="btnFind" title="모든 곡에서 찾기" aria-label="모든 곡에서 찾기"></button>
+    </header>
+    <div class="scroller" id="scroller">
+      <div class="updbar glass" id="updBar" hidden></div>
+      <section class="view home" id="viewHome"></section>
+      <section class="view plview" id="viewList" hidden>
+        <div class="plhero" id="plHero"></div>
+        <div class="listpane" id="listPane">
+          <div class="plnow" id="plNow" hidden></div>
+          <div class="tools" id="listTools"></div>
+          <label class="search" id="searchBox" hidden><span class="i" data-icon="search"></span><input type="text" id="searchInput" placeholder="제목, 가수, 앨범 검색" autocomplete="off"></label>
+          <div class="vlist" id="vlist"><div class="spacer" id="spacer"></div></div>
+          <div class="empty" id="empty" hidden></div>
+        </div>
+      </section>
+      <section class="view" id="viewFx" hidden><div class="pane" id="paneFx"></div></section>
+      <section class="view" id="viewEq" hidden><div class="pane" id="paneEq"></div></section>
+      <section class="view lyview" id="viewLyr" hidden><div class="pane lypane" id="paneLyr" hidden></div></section>
+      <section class="view" id="viewSet" hidden><div class="pane" id="paneSet"></div></section>
+      <div class="tailpad" aria-hidden="true"></div>
     </div>
-    <div class="seek">
+    <div class="editbar glass" id="editBar" hidden></div>
+  </main>
+
+  <!-- 재생 막대: 넓은 화면은 아래 전체, 휴대폰은 떠 있는 미니 플레이어 -->
+  <footer class="pbar glass lens" id="pbar">
+    <div class="pprog" aria-hidden="true"><div class="fill" id="pprogFill"></div></div>
+    <button class="pinfo" id="pinfo" title="재생 화면 열기" aria-label="재생 화면 열기">
+      <span class="art" id="art"><span class="i" data-icon="note"></span><img id="artImg" alt="" hidden></span>
+      <span class="meta"><span class="title" id="title">재생할 음악을 추가하세요</span><span class="sub" id="sub">파일이나 폴더를 열어 주세요</span></span>
+    </button>
+    <div class="ctrl">
+      <button class="ib dk" id="btnShuffle" title="무작위 재생" aria-label="무작위 재생"></button>
+      <button class="ib big dk" id="btnPrev" title="이전 곡" aria-label="이전 곡"></button>
+      <button class="play" id="btnPlay" title="재생 / 일시정지 (Space)" aria-label="재생"></button>
+      <button class="ib big" id="btnNext" title="다음 곡" aria-label="다음 곡"></button>
+      <button class="ib dk" id="btnRepeat" title="반복" aria-label="반복"></button>
+    </div>
+    <div class="seek dk">
       <span id="cur" class="num">0:00</span>
       <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="재생 위치">
       <span id="dur" class="num">0:00</span>
     </div>
-    <div class="ctrl">
-      <button class="ib" id="btnShuffle" title="무작위 재생" aria-label="무작위 재생"></button>
-      <button class="ib big" id="btnPrev" title="이전 곡" aria-label="이전 곡"></button>
-      <button class="play" id="btnPlay" title="재생 / 일시정지 (Space)" aria-label="재생"></button>
-      <button class="ib big" id="btnNext" title="다음 곡" aria-label="다음 곡"></button>
-      <button class="ib" id="btnRepeat" title="반복" aria-label="반복"></button>
+    <div class="tail dk">
+      <div class="vol"><button class="ib" id="btnMute" title="음소거" aria-label="음소거"></button><input type="range" id="vol" min="0" max="100" value="80" aria-label="볼륨"></div>
+      <canvas class="viz" id="viz" aria-hidden="true"></canvas>
+      <button class="ib" id="btnLyr" title="가사" aria-label="가사"></button>
+      <button class="ib" id="btnExpand" title="재생 화면" aria-label="재생 화면"></button>
     </div>
-    <div class="vol">
-      <button class="ib" id="btnMute" title="음소거" aria-label="음소거"></button>
-      <input type="range" id="vol" min="0" max="100" value="80" aria-label="볼륨">
-    </div>
-    <canvas class="viz" id="viz" aria-hidden="true"></canvas>
-  </header>
+  </footer>
 
-  <section class="listpane card" id="listPane">
-    <div class="phead">
-      <button class="plname" id="plBtn" aria-haspopup="menu"><span class="nm" id="plName">재생목록</span><span class="chev" id="plChev"></span></button><span class="count num" id="listCount"></span><span class="sp"></span>
-      <button class="ib" id="btnSearch" title="검색" aria-label="검색"></button>
-      <button class="ib" id="btnListMenu" title="플레이리스트 메뉴" aria-label="플레이리스트 메뉴"></button>
-    </div>
-    <div class="plnow" id="plNow" hidden></div>
-    <div class="updbar" id="updBar" hidden></div>
-    <div class="tools" id="listTools"></div>
-    <label class="search" id="searchBox" hidden><span class="i" data-icon="search"></span><input type="text" id="searchInput" placeholder="제목, 가수, 앨범 검색" autocomplete="off"></label>
-    <div class="vlist" id="vlist"><div class="spacer" id="spacer"></div></div>
-    <div class="empty" id="empty" hidden></div>
-    <div class="editbar" id="editBar" hidden></div>
-  </section>
-
-  <section class="sidepane card" id="sidePane">
-    <nav class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="fx">음장 효과 <span class="badge" id="fxBadge" hidden></span></button>
-      <button class="tab" role="tab" data-tab="eq">이퀄라이저</button>
-      <button class="tab" role="tab" data-tab="lyr">가사</button>
-      <button class="tab" role="tab" data-tab="set">설정</button>
-    </nav>
-    <div class="pane" id="paneFx"></div>
-    <div class="pane" id="paneEq" hidden></div>
-    <div class="pane lypane" id="paneLyr" hidden></div>
-    <div class="pane" id="paneSet" hidden></div>
-  </section>
-
-  <nav class="btabs" role="tablist">
-    <button data-tab="list" role="tab"><span class="i" data-icon="list"></span>재생목록</button>
-    <button data-tab="fx" role="tab"><span class="i" data-icon="fx"></span>음장<span class="badge" id="fxBadgeM" hidden></span></button>
-    <button data-tab="eq" role="tab"><span class="i" data-icon="eq"></span>EQ</button>
-    <button data-tab="lyr" role="tab"><span class="i" data-icon="lyrics"></span>가사</button>
-    <button data-tab="set" role="tab"><span class="i" data-icon="gear"></span>설정</button>
+  <!-- 휴대폰: 아래 메뉴 -->
+  <nav class="bnav glass lens" id="bnav">
+    <button data-go="home"><span class="i" data-icon="home"></span><span>홈</span></button>
+    <button data-go="fx"><span class="i" data-icon="fx"></span><span>음장</span><span class="badge" id="fxBadgeM" hidden></span></button>
+    <button data-go="eq"><span class="i" data-icon="eq"></span><span>EQ</span></button>
+    <button data-go="set"><span class="i" data-icon="gear"></span><span>설정</span></button>
   </nav>
 </div>
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- 재생 화면 (전체) -->
+<div class="player" id="player" hidden role="dialog" aria-label="재생 화면">
+  <div class="pl-bg" id="plBg"></div>
+  <header class="pl-top">
+    <button class="ib" id="pClose" title="닫기" aria-label="닫기"></button>
+    <button class="pl-from" id="pFrom"></button>
+    <button class="ib" id="pMore" title="더보기" aria-label="더보기"></button>
+  </header>
+  <div class="pl-main">
+    <div class="pl-left">
+      <div class="pl-art" id="pArt"><span class="i" data-icon="note"></span><img id="pArtImg" alt="" hidden><canvas class="pl-viz" id="pViz" aria-hidden="true"></canvas></div>
+      <div class="pl-meta"><div class="t" id="pTitle"></div><div class="s" id="pSub"></div></div>
+      <div class="pl-seek"><input type="range" id="pSeek" min="0" max="1000" value="0" step="1" aria-label="재생 위치"><div class="times num"><span id="pCur">0:00</span><span id="pDur">0:00</span></div></div>
+      <div class="pl-ctrl">
+        <button class="ib" id="pShuffle" title="무작위 재생" aria-label="무작위 재생"></button>
+        <button class="ib big" id="pPrev" title="이전 곡" aria-label="이전 곡"></button>
+        <button class="play big" id="pPlay" title="재생 / 일시정지" aria-label="재생"></button>
+        <button class="ib big" id="pNext" title="다음 곡" aria-label="다음 곡"></button>
+        <button class="ib" id="pRepeat" title="반복" aria-label="반복"></button>
+      </div>
+    </div>
+    <div class="pl-right">
+      <nav class="pl-tabs glass"><button data-ptab="queue">다음 트랙</button><button data-ptab="lyr">가사</button></nav>
+      <div class="pl-panel" id="pPanel"><div class="queue" id="pQueue"></div></div>
+    </div>
+  </div>
+</div>
+<div class="toast glass" id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

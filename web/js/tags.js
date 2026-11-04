@@ -108,7 +108,7 @@ function parseID3v2(tag, info) {
       if (fflags & 0xc0) continue;
       if (fflags & 0x20) data = data.subarray(1);
     }
-    const key = id.length === 3 ? ({ TT2: 'TIT2', TP1: 'TPE1', TAL: 'TALB', TP2: 'TPE2', TRK: 'TRCK', PIC: 'APIC', TLE: 'TLEN', ULT: 'USLT' })[id] || id : id;
+    const key = id.length === 3 ? ({ TT2: 'TIT2', TP1: 'TPE1', TAL: 'TALB', TP2: 'TPE2', TRK: 'TRCK', PIC: 'APIC', TLE: 'TLEN', ULT: 'USLT', TCO: 'TCON' })[id] || id : id;
     if (key[0] === 'T' && key !== 'TXXX') {
       const s = clean(decodeText(data[0], data.subarray(1)));
       if (key === 'TIT2') info.title = s;
@@ -117,6 +117,7 @@ function parseID3v2(tag, info) {
       else if (key === 'TPE2') info.albumArtist = s;
       else if (key === 'TRCK') info.track = parseInt(s, 10) || 0;
       else if (key === 'TLEN' && +s > 0) info.tlen = +s / 1000;
+      else if (key === 'TCON' && !info.genre) info.genre = cleanGenre(decodeText(data[0], data.subarray(1)));
     } else if (key === 'USLT') {
       const enc = data[0];
       const o = skipString(data, 4, enc);
@@ -185,6 +186,7 @@ function parseVorbisComment(b, o, info) {
     else if (k === 'ALBUM' && !info.album) info.album = v;
     else if (k === 'ALBUMARTIST' && !info.albumArtist) info.albumArtist = v;
     else if (k === 'TRACKNUMBER') info.track = parseInt(v, 10) || 0;
+    else if (k === 'GENRE' && !info.genre) info.genre = cleanGenre(raw);
     else if (k === 'METADATA_BLOCK_PICTURE' && !info.picture) {
       try { const bin = Uint8Array.from(atob(v), c => c.charCodeAt(0)); parseFlacPicture(bin, 0, info); } catch (e) { /* noop */ }
     }
@@ -299,7 +301,7 @@ async function parseMp4(rd, info, size) {
         walk(b, cs, ce, depth + 1);
       } else if (t === 'meta') {
         walk(b, cs + 4, ce, depth + 1);
-      } else if (depth >= 1 && (ilstNames[t] || t === 'covr' || t === 'trkn' || t === '\u00a9lyr')) {
+      } else if (depth >= 1 && (ilstNames[t] || t === 'covr' || t === 'trkn' || t === '\u00a9lyr' || t === '\u00a9gen' || t === 'gnre')) {
         // child 'data' atom
         const dsz = be32(b, cs), dt = ascii(b, cs + 4, 4);
         if (dt === 'data') {
@@ -307,6 +309,8 @@ async function parseMp4(rd, info, size) {
           if (t === 'covr') { if (!info.picture) info.picture = { type: 3, mime: typ === 14 ? 'image/png' : 'image/jpeg', data: payload.slice() }; }
           else if (t === 'trkn') info.track = be16(payload, 2);
           else if (t === '\u00a9lyr') info.lyrics = td8.decode(payload).trim();
+          else if (t === '\u00a9gen') { if (!info.genre) info.genre = cleanGenre(td8.decode(payload)); }
+          else if (t === 'gnre') { if (!info.genre && payload.length >= 2) info.genre = cleanGenre(ID3_GENRES[be16(payload, 0) - 1] || ''); }
           else info[ilstNames[t]] = clean(td8.decode(payload));
         }
       }
@@ -333,6 +337,7 @@ async function parseWav(rd, info, size, head) {
           const k = ascii(b, p, 4), l = le32(b, p + 4);
           const s = clean(latin1OrKorean(b.subarray(p + 8, p + 8 + l)));
           if (k === 'INAM') info.title = s; else if (k === 'IART') info.artist = s; else if (k === 'IPRD') info.album = s;
+          else if (k === 'IGNR' && !info.genre) info.genre = cleanGenre(s);
           p += 8 + l + (l & 1);
         }
       }
@@ -344,9 +349,34 @@ async function parseWav(rd, info, size, head) {
   }
 }
 
+/* ---------- 장르 ---------- */
+// ID3v1 장르 번호 (ID3v2 의 '(13)' · MP4 의 gnre 도 이 번호를 쓴다)
+const ID3_GENRES = ('Blues|Classic Rock|Country|Dance|Disco|Funk|Grunge|Hip-Hop|Jazz|Metal|New Age|Oldies|Other|Pop|R&B|Rap|Reggae|Rock|Techno|' +
+  'Industrial|Alternative|Ska|Death Metal|Pranks|Soundtrack|Euro-Techno|Ambient|Trip-Hop|Vocal|Jazz+Funk|Fusion|Trance|Classical|Instrumental|' +
+  'Acid|House|Game|Sound Clip|Gospel|Noise|Alternative Rock|Bass|Soul|Punk|Space|Meditative|Instrumental Pop|Instrumental Rock|Ethnic|Gothic|' +
+  'Darkwave|Techno-Industrial|Electronic|Pop-Folk|Eurodance|Dream|Southern Rock|Comedy|Cult|Gangsta|Top 40|Christian Rap|Pop/Funk|Jungle|' +
+  'Native American|Cabaret|New Wave|Psychedelic|Rave|Showtunes|Trailer|Lo-Fi|Tribal|Acid Punk|Acid Jazz|Polka|Retro|Musical|Rock & Roll|' +
+  'Hard Rock|Folk|Folk-Rock|National Folk|Swing|Fast Fusion|Bebop|Latin|Revival|Celtic|Bluegrass|Avantgarde|Gothic Rock|Progressive Rock|' +
+  'Psychedelic Rock|Symphonic Rock|Slow Rock|Big Band|Chorus|Easy Listening|Acoustic|Humour|Speech|Chanson|Opera|Chamber Music|Sonata|' +
+  'Symphony|Booty Bass|Primus|Groove|Satire|Slow Jam|Club|Tango|Samba|Folklore|Ballad|Power Ballad|Rhythmic Soul|Freestyle|Duet|Punk Rock|' +
+  'Drum Solo|A Cappella|Euro-House|Dance Hall|Goa|Drum & Bass|Club-House|Hardcore|Terror|Indie|Britpop|Punk|Polsk Punk|Beat|' +
+  'Christian Gangsta Rap|Heavy Metal|Black Metal|Crossover|Contemporary Christian|Christian Rock|Merengue|Salsa|Thrash Metal|Anime|J-Pop|Synthpop').split('|');
+/** '(13)' · '13' · '(13)Pop' · 'Pop\0Dance' · '발라드, 국내드라마' → 첫 장르 이름 */
+export function cleanGenre(v) {
+  let s = String(v == null ? '' : v).replace(/\u0000+$/, '');
+  const parts = s.split(/\u0000|;|\s*,\s*|\s*\/\/\s*/).map(x => x.trim()).filter(Boolean);
+  for (let p of parts) {
+    p = p.replace(/^\((\d{1,3})\)\s*(.*)$/, (m, n, rest) => rest || ID3_GENRES[+n] || '');
+    if (/^\d{1,3}$/.test(p)) p = ID3_GENRES[+p] || '';
+    p = p.replace(/^\((RX|CR)\)$/i, '').trim();
+    if (p && !/^(other|unknown|none|genre|기타)$/i.test(p)) return p.slice(0, 40);
+  }
+  return '';
+}
+
 /* ---------- entry ---------- */
 export async function readTags(src) {
-  const info = { title: '', artist: '', album: '', albumArtist: '', track: 0, duration: 0, picture: null, lyrics: '' };
+  const info = { title: '', artist: '', album: '', albumArtist: '', genre: '', track: 0, duration: 0, picture: null, lyrics: '' };
   const rd = await makeReader(src);
   const head = await rd.read(0, HEAD);
   const size = rd.size || head.length;
@@ -373,6 +403,7 @@ export async function readTags(src) {
           if (!info.title) info.title = clean(latin1OrKorean(t.subarray(3, 33)));
           if (!info.artist) info.artist = clean(latin1OrKorean(t.subarray(33, 63)));
           if (!info.album) info.album = clean(latin1OrKorean(t.subarray(63, 93)));
+          if (!info.genre && t[127] < ID3_GENRES.length) info.genre = cleanGenre(String(t[127]));
         }
       }
       info.duration = mp3Duration(b, 0, size - off, hasV1) || info.tlen || 0;
