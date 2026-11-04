@@ -43,11 +43,15 @@ python3 test/ui_func.py                        # 화면 동작
 python3 test/lyrics_test.py                    # 가사 찾기 (LRCLIB 가짜 응답)
 python3 test/lyrics_share_test.py              # 공용 가사 목록 · 자동 의견 보내기 (가짜 응답)
 python3 test/lyrics_retry_test.py              # 가사 서버가 붐빌 때(503/429) 다시 묻기 · 괄호 이름 · 가수 별칭 · 받아들일지 규칙
+python3 test/playlists_test.py                 # 플레이리스트 여러 개 (가짜 안드로이드 연결층 · 저장 · 파일 권한)
 python3 .github/scripts/lyrics_feedback.py selftest
 python3 test/lyrics_bot_test.py                # 가사 봇 전체 흐름 (가짜 GitHub · LRCLIB · ntfy)
 python3 test/android_bridge.py                 # 안드로이드 연결층 흉내
+python3 test/android_update_test.py            # 안드로이드 자동 업데이트 (JS 쪽: 받기 · [설치] · '이 출처 허용' · 결과 · 끄기)
 xvfb-run -a node test/electron_test.js <electron> build/desktop-app       # 실제 Electron (리눅스 빌드)
 xvfb-run -a node test/electron_ipc_test.js <electron> build/desktop-app   # 가사 의견 · 공용 목록 IPC
+xvfb-run -a node test/electron_playlist_test.js <electron> build/desktop-app /tmp/pltest   # M3U 내보내기 · 가져오기
+xvfb-run -a node test/electron_update_test.js <electron> build/desktop-app     # 자동 업데이트 (가짜 GitHub · 받기 · 거절 · 닫을 때 /S · 다시 시작 /RELAUNCH)
 ```
 
 ## 릴리스
@@ -57,6 +61,14 @@ xvfb-run -a node test/electron_ipc_test.js <electron> build/desktop-app   # 가�
 3. GitHub 저장소 → **Releases → Draft a new release** → **Choose a tag** 에 `v<버전>` 입력 후 *Create new tag* (대상 main)
    → 제목 · 설명 → `Ullim-Setup-<버전>.exe`, `Ullim-<버전>.apk` 를 끌어다 놓기 → **Publish release**.
    README 의 "최신 릴리스" 링크가 자동으로 새 버전을 가리킵니다.
+4. **자동 업데이트 알리기** — 릴리스에 두 파일이 올라간 **뒤에**:
+   ```bash
+   python3 build/make_update_manifest.py <버전> "바뀐 점 한 줄"   # update/latest.json (크기 · SHA-256 · versionCode)
+   git add update/latest.json && git commit -m "업데이트 정보 <버전>" && git push
+   ```
+   설치된 앱(1.1.0+)이 시작 12초 뒤 · 6시간마다 이 파일을 읽어 새 버전을 받아요. 릴리스 파일 이름은 반드시
+   `v<버전>/Ullim-Setup-<버전>.exe`, `v<버전>/Ullim-<버전>.apk` (앱이 이 모양의 주소만 받음). 올린 파일을 바꾸면 이 파일도 다시 만들어야 해요(SHA-256).
+   APK 는 `--version-code` 를 올리고 **같은 키**로 서명해야 설치돼요.
 
 APK 서명 키(`android/keystore/`)는 저장소에 없으니, 새 작업 환경에서 APK 를 빌드할 때는 보관해 둔 키 파일 두 개를 그 폴더에 다시 넣어야 합니다.
 (키 없이 빌드하면 새 키가 만들어져, 기존 사용자는 앱을 지우고 다시 설치해야 합니다)

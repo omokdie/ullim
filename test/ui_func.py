@@ -57,10 +57,10 @@ with sync_playwright() as p:
     R['after_off_chain'] = pg.evaluate('__ullim.engine._chain')
     # remove current track while playing
     n_before = pg.evaluate('__ullim.list.length'); idx = cur()['i']
-    pg.hover(f'.row[data-i="{idx}"]'); pg.click(f'.row[data-i="{idx}"] .x'); time.sleep(1.0)
+    pg.hover(f'.row[data-i="{idx}"]'); pg.click(f'.row[data-i="{idx}"] .x'); pg.click('.menu button:has-text("이 목록에서 빼기")'); time.sleep(1.0)
     R['remove_current'] = {'n_before': n_before, 'n_after': pg.evaluate('__ullim.list.length'), 'now': cur()}
     # sort by title
-    pg.click('#btnListMenu'); pg.click('.menu button:has-text("제목 순으로 정렬")'); time.sleep(0.3)
+    pg.click('#btnListMenu'); pg.click('.menu button:has-text("정렬…")'); pg.click('.menu button:has-text("제목 순")'); time.sleep(0.3)
     R['sorted_titles'] = pg.evaluate('__ullim.list.map(t => t.title || t.name)')
     R['cur_after_sort'] = cur()
     # save user preset through the dialog

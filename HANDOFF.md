@@ -13,6 +13,9 @@
 | 4 | 1.0.1: 노래 제목에 맞는 가사를 인터넷에서 찾아 띄우기 | ✅ LRCLIB 자동 검색 · 싱크 가사 · 파일 속 가사 · `.lrc` · 직접 검색 |
 | 5 | JSE 처럼 GitHub 에 올리고, 곡마다 지정되는 가사를 사용자 피드백으로 | ✅ `lyrics/overrides.json` 공용 목록 + 투표 봇 |
 | 6 | 가사가 없는 곡은 사용자가 찾아 고르면 자동 지정 + 피드백 자동 전달, 다른 사람에게도 표시 | ✅ 앱 → ntfy.sh(익명) → Actions(30분) → 공용 목록 → 모든 앱(2시간) |
+| 7 | 1.0.2: 있는 노래인데 가사 못 찾음 · 인터넷 되는데 연결 안 됨 | ✅ LRCLIB 503 다시 묻기 · 이름 맞추기 (아래 1.0.2 절) |
+| 8 | 1.1.0: 플레이리스트를 만들고 관리 | ✅ 여러 플레이리스트 · 편집(여러 곡 · 끌어서 순서) · 관리 창 · PC M3U |
+| 9 | 1.1.0: 이미 받은 사람들(PC · 안드로이드)도 자동 업데이트 | ✅ 1.1.0 부터 (아래 절). 1.0.x 는 업데이트 기능이 없어 1.1.0 만 한 번 직접 설치 |
 
 ## 2. 구조 요약
 
@@ -43,6 +46,44 @@ v1.0.1 은 사용자 허락을 받아 **사용자 PC 의 Claude 앱 브라우저
 임시 브랜치 `release-upload-tmp` 는 이 세션에서 지울 수 없어 남아 있음(사용자 확인 후 웹에서 삭제).
 APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관용으로 전달함 — 다음 버전 APK 빌드 때 `android/keystore/` 에 다시 넣어야 함.
 
+### 1.1.0 — 플레이리스트 여러 개
+- `app.js`: `pls`(전체) · `shown`(왼쪽에 보이는 목록) · `playPl`(재생 중인 목록). **`list` 는 항상 `playPl.tracks` 와 같은 배열** — 재생 쪽 코드(playIndex ·
+  다음 곡 · 섞기 order · 크로스페이드 · 가사)는 그대로 list/P.index 를 쓴다. 화면 · 편집 함수는 `shown.tracks` 를 쓴다(refreshView · addItems ·
+  removeTracks · sortList · moveTrack · clearList). 보이는 목록에서 곡을 누르면 `adoptShown()` 으로 재생 목록이 바뀐다.
+- 같은 파일이 여러 목록에 있으면 곡 객체는 목록마다 따로. 안드로이드 파일 권한은 어느 목록에도 안 남은 곡만 돌려줌(`releaseUnused`).
+- 저장 `ullim.playlists.v2` = { v:2, play, shown, tracks:[[key,name,title,artist,album,dur,tagged]…], lists:[{id,name,items:[tracks 번호]}] }
+  (곡 정보 한 번만 저장). 처음 실행 때 1.0.x 의 `ullim.playlist.v1` 을 '재생목록' 으로 옮기고, v2 저장에 성공하면 v1 은 지움
+  (안 지우면 큰 라이브러리가 두 번 저장돼 저장 공간 5MB 를 넘김). 저장 실패 시: 가사 임시 저장 줄이기(`cacheShrink`) → v1 비우고 재시도 →
+  그래도 안 되면 v1 되돌리고 안내. 불러오기는 망가진 저장 내용(null · 숫자 · 같은 id)도 견딤.
+- 편집 모드(`EDIT`): 곡 고르기(Set of 곡 객체) · ≡ 끌기(`#vlist` 가 포인터를 잡음, 행은 가상 스크롤로 다시 그려져도 됨) · 아래 편집 막대.
+- PC M3U: `desktop/main.js` 'save-playlist'(대화상자로 고른 곳에 UTF-8, .m3u 면 BOM) · 'open-playlists'(M3U/M3U8/PLS, 상대 경로 · file:// ·
+  CP949 옛 파일, 없는 파일과 인터넷 주소는 건너뜀). 시험용 `ULLIM_PLAYLIST_TEST_DIR`.
+- 시험: `test/playlists_test.py`(옮기기 · 만들기 · 넣기 · 편집 · 끌기 · 재생 중 목록 바꾸기 · 권한 · 이름/복사/관리/지우기 · 다시 열기 · 휴대폰 화면),
+  `test/electron_playlist_test.js`(M3U 내보내기 · 가져오기).
+
+- 독립 검토(별도 에이전트)에서 나온 9건 모두 고침: 위 저장 공간 문제(높음), 검색 중 끌기 위치(Ctrl+F 는 편집을 끝냄 + 보이는 줄 → 곡 번호),
+  크로스페이드 대기 중 목록이 바뀌면 곡으로 다시 찾기, 끌기 취소(Esc · 뒤로 · Delete · 목록 변경), 메뉴가 열려 있으면 단축키 무시,
+  창 Esc 는 문서 전체에서 한 번에 맨 위 창만, 아무것도 안 틀었을 때 다음/이전 곡은 보이는 목록에서, M3U 못 찾은 곡 수 · UTF-16BE ·
+  못 읽은 파일 안내 · 인터넷 쪽 공유 폴더(\\서버) 경로 건너뛰기(집 · 회사 NAS 는 허용).
+
+### 1.1.0 — 자동 업데이트
+- 정보 파일 `update/latest.json` = { version, notes, windows:{url,sha256,size}, android:{url,sha256,size,versionCode} }.
+  릴리스에 파일을 올린 **뒤** `build/make_update_manifest.py` 로 만들어 push (RELEASING 4단계). 화면 `web/js/update.js` 가 시작 12초 뒤 · 6시간마다 읽음
+  (설정 '자동 업데이트' 끄면 안 읽고, 받아 둔 파일도 지움). 네이티브 쪽은 `v<버전>/Ullim-Setup-<버전>.exe` · `v<버전>/Ullim-<버전>.apk`
+  모양의 이 저장소 릴리스 주소만, 지금보다 새 버전만, 크기 · SHA-256 이 맞을 때만 씀.
+- Windows `desktop/main.js`: 설치판(실행 파일 옆 Uninstall.exe)일 때만. `%APPDATA%\Ullim\update\` 에 받기 → `quit` 때 `/S` 로 따로 떨어진
+  프로세스 실행(윈도우 종료 · 로그오프 중이면 안 함) · '지금 다시 시작' 은 `/S /RELAUNCH`. 설치 프로그램(ullim.nsi)은 조용한 설치일 때 앱이
+  스스로 닫힐 때까지 최대 10초 기다린 뒤에만 강제로 닫고(설정 저장 보호), 지운 바탕 화면 바로 가기는 다시 만들지 않고, /RELAUNCH 면 새 버전 실행.
+  시작 5초 뒤 지난 버전 설치 파일 · 받다 만 파일 정리. 시험용 `ULLIM_UPDATE_TEST=<주소>/` (받는 곳 바꾸기 + 설치 대신 ran.json 기록).
+- Android `Updater.java`: cacheDir/update 에 받기 → SHA-256 · `getPackageArchiveInfo`(같은 패키지 · 더 큰 versionCode) 확인 →
+  [설치] 때 PackageInstaller 세션(`setRequireUserAction(NOT_REQUIRED)`, 권한 `REQUEST_INSTALL_PACKAGES` · `UPDATE_PACKAGES_WITHOUT_USER_ACTION`).
+  '이 출처 허용'이 꺼져 있으면 설정 화면 → 돌아오면(onResume) JS `__ullimUpdatePermission` 으로 이어서 설치. 결과는 내부 수신기
+  `Updater$StatusReceiver` → JS `__ullimUpdateResult`. 확인 창이 필요하면 화면이 앞에 있을 때만 띄우고 아니면 취소(-1). 새 버전으로 바뀌면
+  `Updater$ReplacedReceiver`(MY_PACKAGE_REPLACED)가 '업데이트했어요' 알림(울림이 시작한 업데이트일 때만, filesDir/update-committed 표시).
+  재생 중이 아닐 때 뒤로 가기로 나가면 조용히만 설치 시도(12+ · 허용된 경우, 아니면 아무것도 안 함).
+- 시험: `test/electron_update_test.js`(실제 Electron + 가짜 GitHub), `test/android_update_test.py`(가짜 브리지로 JS 흐름). 안드로이드 네이티브
+  설치 흐름은 실기기가 없어 컴파일 · dex · 매니페스트까지만 확인 → 실제 기기에서 1.1.0 → 다음 버전으로 처음 업데이트할 때 확인 필요.
+
 ### 1.0.2 — 가사를 못 찾던 문제 (실제 LRCLIB 로 확인)
 - LRCLIB 이 요청의 30~50%를 `503 ServerOverloaded`(Retry-After: 1)로 돌려보냄(2026-11 기준, 더 엄격한 요청 한도 도입). 1.0.1 은 이를
   '인터넷 끊김'으로 보여 주고, 일부 검색만 막혀도 '없음'을 3일 기억했음.
@@ -58,5 +99,5 @@ APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관�
 ## 4. 남은 일 · 아이디어
 1. 같은 곡이 태그 표기만 다른 경우(아이유 / IU) 공용 목록 열쇠가 달라 따로 집계됨 → 별칭 표 또는 LRCLIB 번호 기준 묶기.
 2. 공용 목록이 커지면(수만 곡) 첫 글자별로 나눠 받기.
-3. Windows 코드 서명 인증서(없으면 SmartScreen 경고), 자동 업데이트(electron-updater / APK 새 버전 안내).
+3. Windows 코드 서명 인증서(없으면 SmartScreen 경고). 자동 업데이트는 1.1.0 에서 완료(앱이 직접 받은 파일에는 '인터넷에서 받음' 표시가 붙지 않아 보통 경고 없이 설치됨 — 실제 Windows 에서 첫 업데이트 때 확인).
 4. GitHub Actions 로 exe · apk 자동 빌드(지금은 작업 환경에서 빌드 후 릴리스에 첨부).

@@ -53,6 +53,8 @@ public class MainActivity extends Activity {
     WebView web;
     String reqFiles, reqTree, reqScan, pendingOpen;
     boolean pageReady;
+    volatile boolean resumed;          // 화면이 앞에 보이는 중 (업데이트 확인 창은 이때만 띄움)
+    boolean awaitInstallPerm;          // '이 출처 허용' 설정 화면에 다녀오는 중
 
     @Override
     protected void onCreate(Bundle state) {
@@ -80,7 +82,38 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(this), "UllimAndroid");
         setContentView(web);
         web.loadUrl(ORIGIN + "/index.html");
-        if (state == null) handleIntent(getIntent());
+        if (state == null) {
+            handleIntent(getIntent());
+            new Thread(() -> Updater.cleanup(getApplicationContext())).start();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        if (awaitInstallPerm) {
+            awaitInstallPerm = false;
+            boolean ok = Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls();
+            js("window.__ullimUpdatePermission && window.__ullimUpdatePermission(" + ok + ")");
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        super.onPause();
+    }
+
+    /** 업데이트 설치에 필요한 '이 출처 허용' 설정 화면 (돌아오면 onResume 에서 이어서 설치) */
+    void openInstallPermission() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+            awaitInstallPerm = true;
+        } catch (Exception e) {
+            try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)); awaitInstallPerm = true; }
+            catch (Exception e2) { js("window.__ullimUpdatePermission && window.__ullimUpdatePermission(false)"); }
+        }
     }
 
     @Override
@@ -152,6 +185,11 @@ public class MainActivity extends Activity {
                 try { a.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)); } catch (Exception e) { /* 브라우저 없음 */ }
             });
         }
+        /** 자동 업데이트: 설치된 버전 번호 (update/latest.json 의 versionCode 와 비교) */
+        @JavascriptInterface
+        public int versionCode() {
+            return (int) Updater.currentVersionCode(a);
+        }
         @JavascriptInterface
         public void exitApp() {
             a.main.post(() -> { PlaybackService.stop(a); a.finishAndRemoveTask(); });
@@ -165,6 +203,27 @@ public class MainActivity extends Activity {
             try { JSONArray a = new JSONArray(args); url = a.optString(0, null); body = a.optString(1, null); } catch (Exception e) { /* noop */ }
             httpPost(id, url, body);
         }
+        else if ("updateDownload".equals(method)) {
+            String url = null, sha = null, ver = null;
+            long size = 0;
+            try { JSONArray x = new JSONArray(args); url = x.optString(0, null); sha = x.optString(1, null); size = x.optLong(2, 0); ver = x.optString(3, null); } catch (Exception e) { /* noop */ }
+            final String u = url, h = sha, v = ver;
+            final long sz = size;
+            new Thread(() -> {
+                try { Updater.download(getApplicationContext(), u, h, sz, v, "Ullim/" + appVersion + " (Android music player)"); resolve(id, "{\"ready\":true}"); }
+                catch (Exception e) { reject(id, String.valueOf(e.getMessage())); }
+            }).start();
+        }
+        else if ("updateInstall".equals(method)) {
+            boolean q = false;
+            try { q = new JSONArray(args).optBoolean(0, false); } catch (Exception e) { /* noop */ }
+            final boolean quietOnly = q;
+            new Thread(() -> {
+                try { resolve(id, JSONObject.quote(Updater.install(this, quietOnly))); }
+                catch (Exception e) { reject(id, String.valueOf(e.getMessage())); }
+            }).start();
+        }
+        else if ("updateDiscard".equals(method)) new Thread(() -> { Updater.discard(getApplicationContext()); resolve(id, "true"); }).start();
         else if ("pickFiles".equals(method)) pickFiles(id);
         else if ("pickFolder".equals(method)) pickFolder(id);
         else if ("scanLibrary".equals(method)) scanLibrary(id);
@@ -176,9 +235,10 @@ public class MainActivity extends Activity {
         if (pendingOpen != null) { js("window.__ullimOpen && window.__ullimOpen(" + JSONObject.quote(pendingOpen) + ")"); pendingOpen = null; }
     }
 
-    /** 가사용: LRCLIB 와 커뮤니티 가사 목록(GitHub) 주소만 허용 */
+    /** 가사 · 업데이트 확인용: LRCLIB, 커뮤니티 가사 목록 · 업데이트 정보(GitHub) 주소만 허용 */
     void httpGet(final String id, final String url) {
-        if (url == null || !(url.startsWith("https://lrclib.net/api/") || url.startsWith("https://raw.githubusercontent.com/omokdie/ullim/main/lyrics/"))) { reject(id, "bad url"); return; }
+        if (url == null || !(url.startsWith("https://lrclib.net/api/") || url.startsWith("https://raw.githubusercontent.com/omokdie/ullim/main/lyrics/")
+                || url.startsWith("https://raw.githubusercontent.com/omokdie/ullim/main/update/"))) { reject(id, "bad url"); return; }
         new Thread(() -> {
             java.net.HttpURLConnection c = null;
             JSONObject o = new JSONObject();

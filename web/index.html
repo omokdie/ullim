@@ -37,14 +37,17 @@
 
   <section class="listpane card" id="listPane">
     <div class="phead">
-      <h2>재생목록</h2><span class="count num" id="listCount"></span><span class="sp"></span>
+      <button class="plname" id="plBtn" aria-haspopup="menu"><span class="nm" id="plName">재생목록</span><span class="chev" id="plChev"></span></button><span class="count num" id="listCount"></span><span class="sp"></span>
       <button class="ib" id="btnSearch" title="검색" aria-label="검색"></button>
-      <button class="ib" id="btnListMenu" title="더보기" aria-label="더보기"></button>
+      <button class="ib" id="btnListMenu" title="플레이리스트 메뉴" aria-label="플레이리스트 메뉴"></button>
     </div>
+    <div class="plnow" id="plNow" hidden></div>
+    <div class="updbar" id="updBar" hidden></div>
     <div class="tools" id="listTools"></div>
     <label class="search" id="searchBox" hidden><span class="i" data-icon="search"></span><input type="text" id="searchInput" placeholder="제목, 가수, 앨범 검색" autocomplete="off"></label>
     <div class="vlist" id="vlist"><div class="spacer" id="spacer"></div></div>
     <div class="empty" id="empty" hidden></div>
+    <div class="editbar" id="editBar" hidden></div>
   </section>
 
   <section class="sidepane card" id="sidePane">

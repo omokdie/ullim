@@ -360,6 +360,13 @@ export function cachePut(key, lyr, opt = {}) {
   if (keys.length > MAX_CACHE) keys.sort((a, b) => c[a].at - c[b].at).slice(0, keys.length - MAX_CACHE).forEach(k => delete c[k]);
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch (e) { /* 저장 공간 부족 */ }
 }
+/** 저장 공간이 모자랄 때(플레이리스트 저장이 실패하면): 직접 고른 가사와 최근 곡만 남긴다 */
+export function cacheShrink(keep = 40) {
+  const c = loadCache();
+  Object.keys(c).filter(k => !(c[k].manual || c[k].source === 'manual'))
+    .sort((a, b) => (c[b].at || 0) - (c[a].at || 0)).slice(keep).forEach(k => delete c[k]);
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch (e) { /* noop */ }
+}
 export function cacheDrop(key) { const c = loadCache(); delete c[key]; try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch (e) { /* noop */ } }
 
 /* ---------- .lrc 파일 ---------- */

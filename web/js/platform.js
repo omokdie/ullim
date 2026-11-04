@@ -55,9 +55,17 @@ function electronPlatform() {
     nowPlaying: info => N.nowPlaying(info),
     httpGet: url => N.httpGet(url),
     httpPost: (url, body) => N.httpPost(url, body),
+    savePlaylist: (name, text) => N.savePlaylist(name, text),
+    openPlaylists: () => N.openPlaylists(),
     findLrc: key => N.findLrc(key),
     openExternal: url => N.openExternal(url),
     setTheme: () => {},
+    // 자동 업데이트: 설치 프로그램으로 설치한 앱에서만 (압축 파일 · 개발 실행은 제외)
+    update: N.updateSupported ? {
+      download: (url, sha256, size, version) => N.updateDownload(url, sha256, size, version),
+      discard: () => N.updateDiscard(),
+      restartNow: () => N.updateRestart(),
+    } : null,
   };
 }
 
@@ -94,6 +102,13 @@ function androidPlatform() {
     release: keys => { try { A.release(JSON.stringify(keys)); } catch (e) { /* noop */ } },
     exit: () => { try { A.exitApp(); } catch (e) { /* noop */ } },
     ready: () => { try { A.ready(); } catch (e) { /* noop */ } },
+    update: {
+      versionCode: () => { try { return Number(A.versionCode()) || 0; } catch (e) { return 0; } },
+      download: (url, sha256, size, version) => call('updateDownload', url, sha256, size, version),
+      install: () => call('updateInstall'),            // 'started' | 'need-permission'
+      installQuiet: () => call('updateInstall', true), // 안드로이드 12+ 에서 확인 창 없이 설치할 수 있을 때만 (아니면 'skip')
+      discard: () => call('updateDiscard'),
+    },
   };
 }
 

@@ -5,7 +5,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 
 !define APPNAME   "울림"
-!define VERSION   "1.0.2"
+!define VERSION   "1.1.0"
 !define PUBLISHER "Ullim"
 !define EXE       "Ullim.exe"
 !define AUMID     "kr.ullim.player"
@@ -31,7 +31,7 @@ BrandingText "${APPNAME} ${VERSION}"
 ShowInstDetails nevershow
 ShowUninstDetails nevershow
 
-VIProductVersion "1.0.2.0"
+VIProductVersion "1.1.0.0"
 VIAddVersionKey /LANG=1042 "ProductName" "${APPNAME}"
 VIAddVersionKey /LANG=1042 "FileDescription" "${APPNAME} 설치 프로그램"
 VIAddVersionKey /LANG=1042 "CompanyName" "${PUBLISHER}"
@@ -66,17 +66,31 @@ VIAddVersionKey /LANG=1042 "ProductVersion" "${VERSION}"
 !insertmacro MUI_LANGUAGE "Korean"
 
 ; 실행 중인 울림 닫기
+;  - 조용한 설치(/S, 앱의 자동 업데이트)는 앱이 스스로 닫힐 때까지(설정 · 재생목록 저장) 최대 10초 기다린 뒤에만 강제로 닫는다
 !macro CloseApp UN
   nsProcess::_FindProcess "${EXE}"
   Pop $R0
   ${If} $R0 == 0
-    ${IfNot} ${Silent}
+    ${If} ${Silent}
+      StrCpy $R1 0
+      ${DoWhile} $R1 < 40
+        Sleep 250
+        nsProcess::_FindProcess "${EXE}"
+        Pop $R0
+        ${If} $R0 != 0
+          ${ExitDo}
+        ${EndIf}
+        IntOp $R1 $R1 + 1
+      ${Loop}
+    ${Else}
       MessageBox MB_OKCANCEL|MB_ICONINFORMATION "${APPNAME}이(가) 실행 중이에요. [확인]을 누르면 닫고 계속합니다." IDOK +2
       Abort
     ${EndIf}
-    nsProcess::_KillProcess "${EXE}"
-    Pop $R0
-    Sleep 800
+    ${If} $R0 == 0
+      nsProcess::_KillProcess "${EXE}"
+      Pop $R0
+      Sleep 800
+    ${EndIf}
   ${EndIf}
 !macroend
 
@@ -102,8 +116,12 @@ Section "install"
   ; 바로 가기 (작업 표시줄 · 미디어 컨트롤이 같은 앱으로 묶이도록 AUMID 지정)
   CreateShortCut "$SMPROGRAMS\${APPNAME}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\${EXE}" 0 SW_SHOWNORMAL "" "음장 효과 음악 플레이어"
   WinShell::SetLnkAUMI "$SMPROGRAMS\${APPNAME}.lnk" "${AUMID}"
-  CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\${EXE}" 0 SW_SHOWNORMAL "" "음장 효과 음악 플레이어"
-  WinShell::SetLnkAUMI "$DESKTOP\${APPNAME}.lnk" "${AUMID}"
+  ; 바탕 화면 바로 가기: 자동 업데이트(/S) 때는 사용자가 지웠다면 다시 만들지 않음
+  ${IfNot} ${Silent}
+  ${OrIf} ${FileExists} "$DESKTOP\${APPNAME}.lnk"
+    CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\${EXE}" 0 SW_SHOWNORMAL "" "음장 효과 음악 플레이어"
+    WinShell::SetLnkAUMI "$DESKTOP\${APPNAME}.lnk" "${AUMID}"
+  ${EndIf}
 
   ; 연결 프로그램 · 기본 앱 목록에 등록 (기본 앱을 몰래 바꾸지는 않음)
   WriteRegStr HKCU "Software\Classes\${PROGID}" "" "음악 파일"
@@ -143,6 +161,14 @@ Section "install"
   WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" "$0"
 
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+
+  ; 앱의 '지금 다시 시작'(자동 업데이트): 설치가 끝나면 새 버전을 다시 연다
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/RELAUNCH" $R1
+  ${IfNot} ${Errors}
+    Exec '"$INSTDIR\${EXE}"'
+  ${EndIf}
 SectionEnd
 
 Section "Uninstall"

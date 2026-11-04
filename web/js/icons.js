@@ -30,6 +30,14 @@ export const ICONS = {
   moon: S(`<path ${st} d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>`),
   power: S(`<path ${st} d="M12 3v8M6.3 6.3a8 8 0 1 0 11.4 0"/>`),
   chev: S(`<path ${st} d="M9 6l6 6-6 6"/>`),
+  check: S(`<path ${st} d="M5 12.5l4.2 4.2L19 7"/>`),
+  edit: S(`<path ${st} d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4zM13.5 6.5l4 4"/>`),
+  copy: S(`<rect ${st} x="8.5" y="8.5" width="11" height="11" rx="2"/><path ${st} d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/>`),
+  export: S(`<path ${st} d="M12 15V4M7.5 8.5L12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>`),
+  import: S(`<path ${st} d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>`),
+  listAdd: S(`<path ${st} d="M4 6.5h11M4 11.5h11M4 16.5h7M17.5 14v6M14.5 17h6"/>`),
+  grip: S(`<path ${st} d="M5 9h14M5 15h14"/>`),
+  up: S(`<path ${st} d="M12 19V5M6 11l6-6 6 6"/>`),
   lyrics: S(`<path ${st} d="M4 6h12M4 10.5h9M4 15h6"/><path fill="currentColor" d="M20.5 9.2v7.1a2.4 2.4 0 1 1-1.6-2.3V11.4l-3.1.7v5.5a2.4 2.4 0 1 1-1.6-2.3V10.3c0-.4.3-.8.7-.9l4.7-1c.5-.1.9.3.9.8z"/>`),
 };
 export const icon = (name, cls = '') => {

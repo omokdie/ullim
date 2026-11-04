@@ -4,7 +4,10 @@ const { app, BrowserWindow, protocol, ipcMain, dialog, Menu, nativeImage, shell,
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
-const { Readable } = require('stream');
+const { Readable, Transform } = require('stream');
+const { pipeline } = require('stream/promises');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 const WEB = path.join(__dirname, 'web');
 const ASSETS = path.join(__dirname, 'assets');
@@ -174,6 +177,84 @@ ipcMain.handle('pick-files', async () => {
   });
   return r.canceled ? [] : r.filePaths.filter(isAudio);
 });
+/* ---------- 플레이리스트 파일 (M3U · M3U8 · PLS) ---------- */
+const PL_TEST_DIR = process.env.ULLIM_PLAYLIST_TEST_DIR || '';   // 시험용: 대화상자 없이 이 폴더에 저장 · 이 폴더에서 읽기
+ipcMain.handle('save-playlist', async (_e, name, text) => {
+  if (typeof text !== 'string' || text.length > 20e6) return null;
+  const safe = String(name || '플레이리스트').replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').trim().slice(0, 80) || '플레이리스트';
+  let file;
+  if (PL_TEST_DIR) file = path.join(PL_TEST_DIR, safe + '.m3u8');
+  else {
+    const r = await dialog.showSaveDialog(win, {
+      title: '플레이리스트 내보내기', defaultPath: path.join(app.getPath('music'), safe + '.m3u8'),
+      filters: [{ name: 'M3U8 플레이리스트 (UTF-8)', extensions: ['m3u8'] }, { name: 'M3U 플레이리스트', extensions: ['m3u'] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    file = r.filePath;
+  }
+  // .m3u 는 프로그램마다 글자 인코딩을 다르게 짐작하므로 UTF-8 표시(BOM)를 붙인다
+  await fsp.writeFile(file, (/\.m3u$/i.test(file) ? '\ufeff' : '') + text, 'utf8');
+  return file;
+});
+function decodePlaylist(buf) {
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf.subarray(3).toString('utf8');
+  if (buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf.subarray(2));
+  if (buf[0] === 0xfe && buf[1] === 0xff) return new TextDecoder('utf-16be').decode(buf.subarray(2));
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { /* 한국어 윈도우의 옛 .m3u (CP949) */ }
+  try { return new TextDecoder('euc-kr').decode(buf); } catch (e) { return buf.toString('latin1'); }
+}
+/* 다른 컴퓨터의 공유 폴더(\\서버\...) 중 인터넷 쪽 주소는 열지 않는다
+   (내려받은 재생목록이 낯선 서버에 접속하게 만들어 윈도우 로그인 정보를 보내게 하는 것을 막음).
+   집 · 회사 안의 NAS(이름 하나짜리, 192.168.x.x 같은 내부 주소, .local 등)는 그대로 쓴다 */
+function remoteShareHost(p) {
+  const m = /^(?:\\\\|\/\/)([^\\/]+)/.exec(p);
+  if (!m || /^[?.]$/.test(m[1])) return null;          // \\?\C:\... · \\.\ 는 이 컴퓨터
+  return m[1].toLowerCase();
+}
+function localNetworkHost(h) {
+  if (!h.includes('.') && !h.includes(':')) return true;                       // NAS · DISKSTATION 처럼 이름 하나
+  if (/^(10|127)\.\d+\.\d+\.\d+$/.test(h) || /^192\.168\.\d+\.\d+$/.test(h) || /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(h) || /^169\.254\.\d+\.\d+$/.test(h)) return true;
+  return /\.(local|lan|home|internal|localdomain)$/.test(h) || h === 'localhost';
+}
+async function readPlaylistFile(f) {
+  const st = await fsp.stat(f);
+  if (!st.isFile() || st.size > 20e6) throw new Error('too big');
+  const text = decodePlaylist(await fsp.readFile(f));
+  const lines = text.split(/\r\n|\n|\r/).map(l => l.trim());
+  const entries = /\.pls$/i.test(f)
+    ? lines.map(l => /^File\d+\s*=\s*(.+)$/i.exec(l)).filter(Boolean).map(m => m[1].trim())
+    : lines.filter(l => l && !l.startsWith('#'));
+  const dir = path.dirname(f), paths = [], seen = new Set();
+  let missing = 0;
+  for (let p of entries) {
+    if (/^file:\/\//i.test(p)) { try { p = require('url').fileURLToPath(p); } catch (e) { continue; } }
+    else if (/^[a-z][a-z0-9+.-]+:\/\//i.test(p)) continue;              // 인터넷 주소(라디오 등)는 건너뜀
+    const abs = path.resolve(dir, p);
+    if (seen.has(abs) || !isAudio(abs)) continue;
+    seen.add(abs);
+    const host = remoteShareHost(abs);
+    if (host && !localNetworkHost(host)) continue;
+    try { if ((await fsp.stat(abs)).isFile()) paths.push(abs); else missing++; } catch (e) { missing++; }   // 이 컴퓨터에 없는 음악 파일만 '못 찾음'
+  }
+  const name = (/^#PLAYLIST:(.+)$/m.exec(text) || [])[1];
+  return { name: (name || path.basename(f).replace(/\.(m3u8?|pls)$/i, '')).trim().slice(0, 60), paths, missing };
+}
+ipcMain.handle('open-playlists', async () => {
+  let files;
+  if (PL_TEST_DIR) files = (await fsp.readdir(PL_TEST_DIR)).filter(n => /\.(m3u8?|pls)$/i.test(n)).sort().map(n => path.join(PL_TEST_DIR, n));
+  else {
+    const r = await dialog.showOpenDialog(win, {
+      title: '플레이리스트 가져오기', properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '플레이리스트 (M3U · M3U8 · PLS)', extensions: ['m3u8', 'm3u', 'pls'] }],
+    });
+    if (r.canceled) return { lists: [], failed: 0 };
+    files = r.filePaths;
+  }
+  const lists = [];
+  let failed = 0;
+  for (const f of files) { try { lists.push(await readPlaylistFile(f)); } catch (e) { failed++; } }   // 읽을 수 없는 파일
+  return { lists, failed };
+});
 ipcMain.handle('pick-folder', async () => {
   const r = await dialog.showOpenDialog(win, { title: '음악 폴더 추가', properties: ['openDirectory', 'multiSelections'] });
   return r.canceled ? [] : expand(r.filePaths);
@@ -183,7 +264,7 @@ ipcMain.handle('expand-paths', async (_e, paths) => expand(Array.isArray(paths) 
 ipcMain.handle('startup-files', () => { const f = pendingOpen; pendingOpen = []; return f; });
 ipcMain.on('now-playing', (_e, info) => updateThumbar(info || {}));
 
-/* ---------- 가사: LRCLIB · 커뮤니티 가사 목록 요청 (이 두 주소만 허용) · 같은 이름의 .lrc 파일 ---------- */
+/* ---------- 가사: LRCLIB · 커뮤니티 가사 목록 · 업데이트 정보 요청 (이 주소들만 허용) · 같은 이름의 .lrc 파일 ---------- */
 const LRCLIB = 'https://lrclib.net/api/';
 const OVERRIDES = 'https://raw.githubusercontent.com/omokdie/ullim/main/lyrics/';
 const LRCLIB_TEST = process.env.ULLIM_LYRICS_BASE || '';   // 테스트용 대체 주소
@@ -193,6 +274,7 @@ ipcMain.handle('http-get', async (_e, url) => {
   let target;
   if (url.startsWith(LRCLIB)) target = LRCLIB_TEST ? LRCLIB_TEST + url.slice(LRCLIB.length) : url;
   else if (url.startsWith(OVERRIDES)) target = OVERRIDES_TEST ? OVERRIDES_TEST + url.slice(OVERRIDES.length) : url;
+  else if (url.startsWith(UPDATE_MANIFEST)) target = UPDATE_TEST ? UPDATE_TEST + 'manifest/' + url.slice(UPDATE_MANIFEST.length) : url;
   else return { status: 400, body: '' };
   try {
     const r = await net.fetch(target, {
@@ -240,6 +322,112 @@ ipcMain.handle('find-lrc', async (_e, p) => {
   return null;
 });
 
+/* ---------- 자동 업데이트 (설치 프로그램으로 설치한 Windows 앱만) ----------
+ * 화면(web/js/update.js)이 GitHub 의 update/latest.json 을 읽어 새 버전이 있으면 받기를 부탁한다.
+ * 여기서는 이 저장소 릴리스의 'v<버전>/Ullim-Setup-<버전>.exe' 만, 지금보다 새 버전일 때만 받고,
+ * 크기 · SHA-256 이 맞을 때만 '준비됨' 으로 둔다. 앱을 닫을 때 조용히(/S) 설치하고,
+ * '지금 다시 시작' 이면 설치가 끝난 뒤 새 버전을 다시 연다(/RELAUNCH).
+ */
+const UPDATE_MANIFEST = 'https://raw.githubusercontent.com/omokdie/ullim/main/update/';
+const UPDATE_DL = 'https://github.com/omokdie/ullim/releases/download/';
+const UPDATE_TEST = process.env.ULLIM_UPDATE_TEST || '';   // 시험용: 받는 주소를 이 서버로 바꾸고, 설치 프로그램은 실행하지 않고 기록만 남김
+const UPDATE_RE = /^https:\/\/github\.com\/omokdie\/ullim\/releases\/download\/v(\d+\.\d+\.\d+)\/Ullim-Setup-(\d+\.\d+\.\d+)\.exe$/;
+const updateDir = () => path.join(app.getPath('userData'), 'update');
+const updateSupported = () => !!UPDATE_TEST
+  || (process.platform === 'win32' && app.isPackaged && fs.existsSync(path.join(path.dirname(process.execPath), 'Uninstall.exe')));
+let pendingUpdate = null;      // { file, version } — 받아서 확인까지 끝난 설치 파일
+let updateJob = null;          // 받는 중인 작업 (같은 부탁이 겹치면 함께 기다림)
+let sessionEnding = false;     // 윈도우 종료 · 로그오프 중에는 설치하지 않음
+
+function newerVersion(a, b) {
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  return false;
+}
+async function sha256File(file) {
+  const h = crypto.createHash('sha256');
+  await pipeline(fs.createReadStream(file), new Transform({ transform(c, _e, cb) { h.update(c); cb(); } }));
+  return h.digest('hex');
+}
+async function downloadUpdate(url, sha256, size, version) {
+  const dir = updateDir();
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `Ullim-Setup-${version}.exe`);
+  // 지난번에 받아 둔 같은 파일이 있으면 다시 받지 않는다
+  try { const st = await fsp.stat(file); if (st.size === size && await sha256File(file) === sha256) return file; } catch (e) { /* 없음 */ }
+  const part = file + '.part';
+  const target = UPDATE_TEST ? UPDATE_TEST + url.slice(UPDATE_DL.length) : url;
+  const r = await net.fetch(target, { headers: { 'User-Agent': `Ullim/${app.getVersion()} (Windows music player)` }, signal: AbortSignal.timeout(30 * 60 * 1000) });
+  if (r.status !== 200 || !r.body) throw new Error('download http ' + r.status);
+  const len = Number(r.headers.get('content-length') || 0);
+  if (len && len !== size) throw new Error('download size');
+  const h = crypto.createHash('sha256');
+  let got = 0;
+  try {
+    await pipeline(Readable.fromWeb(r.body), new Transform({
+      transform(c, _e, cb) { got += c.length; if (got > size) return cb(new Error('download size')); h.update(c); cb(null, c); },
+    }), fs.createWriteStream(part));
+    if (got !== size) throw new Error('download size');
+    if (h.digest('hex') !== sha256) throw new Error('download sha256');
+    await fsp.rename(part, file);
+  } catch (e) {
+    await fsp.rm(part, { force: true }).catch(() => {});
+    throw e;
+  }
+  return file;
+}
+/* 지금 버전 이하의 설치 파일 · 받다 만 파일 지우기 (업데이트가 끝난 뒤 시작할 때) */
+async function cleanupUpdates() {
+  let names = [];
+  try { names = await fsp.readdir(updateDir()); } catch (e) { return; }
+  for (const n of names) {
+    const m = /^Ullim-Setup-(\d+\.\d+\.\d+)\.exe$/.exec(n);
+    if (m && newerVersion(m[1], app.getVersion()) && !n.endsWith('.part')) continue;
+    if (n === 'ran.json') continue;
+    await fsp.rm(path.join(updateDir(), n), { force: true, recursive: true }).catch(() => {});
+  }
+}
+function runInstaller(relaunch) {
+  const u = pendingUpdate;
+  pendingUpdate = null;
+  if (!u || !fs.existsSync(u.file)) return false;
+  const args = relaunch ? ['/S', '/RELAUNCH'] : ['/S'];
+  if (UPDATE_TEST) {
+    try { fs.writeFileSync(path.join(updateDir(), 'ran.json'), JSON.stringify({ file: path.basename(u.file), version: u.version, args })); } catch (e) { /* noop */ }
+    return true;
+  }
+  try {
+    // 앱이 완전히 닫힌 뒤에도 설치가 이어지도록 따로 떨어진 프로세스로 실행
+    const c = spawn(u.file, args, { detached: true, stdio: 'ignore', windowsHide: true });
+    c.on('error', () => {});
+    c.unref();
+    return true;
+  } catch (e) { return false; }
+}
+ipcMain.on('update-supported', e => { e.returnValue = updateSupported(); });
+ipcMain.handle('update-download', async (_e, url, sha256, size, version) => {
+  if (!updateSupported()) throw new Error('update unsupported');
+  const m = typeof url === 'string' ? UPDATE_RE.exec(url) : null;
+  size = Number(size);
+  if (!m || m[1] !== version || m[2] !== version || !newerVersion(version, app.getVersion())
+    || typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256) || !(size > 0 && size < 400e6)) throw new Error('bad update');
+  if (pendingUpdate && pendingUpdate.version === version) return { ready: true };
+  if (!updateJob) {
+    updateJob = downloadUpdate(url, sha256, size, version)
+      .then(file => { pendingUpdate = { file, version }; return { ready: true }; })
+      .finally(() => { updateJob = null; });
+  }
+  return updateJob;
+});
+ipcMain.handle('update-discard', async () => {
+  pendingUpdate = null;
+  try { await fsp.rm(updateDir(), { recursive: true, force: true }); } catch (e) { /* noop */ }
+  return true;
+});
+ipcMain.on('update-restart', () => {
+  if (pendingUpdate && runInstaller(true)) app.quit();
+});
+
 /* ---------- 시작 ---------- */
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -257,6 +445,10 @@ if (!app.requestSingleInstanceLock()) {
     Menu.setApplicationMenu(null);
     protocol.handle('app', handleApp);
     createWindow();
+    if (win) win.on('session-end', () => { sessionEnding = true; });
+    setTimeout(() => cleanupUpdates().catch(() => {}), 5000);
   });
   app.on('window-all-closed', () => app.quit());
+  // 받아 둔 새 버전은 앱을 닫을 때 조용히 설치 (윈도우 종료 · 로그오프 중이면 다음에)
+  app.on('quit', () => { if (pendingUpdate && !sessionEnding) runInstaller(false); });
 }
