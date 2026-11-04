@@ -1,15 +1,15 @@
 {
-  "version": "1.2.2",
-  "notes": "새 그라데이션 아이콘(밝은 화면 흰 바탕 · 어두운 화면 검은 바탕), 재생 버튼이 울림 표시로 — 재생 중 물결이 움직이고 멈추면 세모로 바뀌어요",
+  "version": "1.2.3",
+  "notes": "더 가볍게(메모리 · 발열 줄이기), 모바일 데이터에서는 가사를 불러오지 않음(설정에서 켜기), 알림에 무작위 · 반복 버튼, 설치 용량 줄이기",
   "windows": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.2/Ullim-Setup-1.2.2.exe",
-    "sha256": "0400427d4024ffe1243f2865a315ac2657b4b933336bd873df3b03bb5de71eed",
-    "size": 104786248
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.3/Ullim-Setup-1.2.3.exe",
+    "sha256": "f4caa39afd5b264b4c1371f6e68f7a107866643ef5ad60bd0fd6d616e54a876c",
+    "size": 95794577
   },
   "android": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.2/Ullim-1.2.2.apk",
-    "sha256": "39b47148b2ad909b00dbda03a2340e97bd2b74b00f4b2fd40c8907c28578fc08",
-    "size": 630114,
-    "versionCode": 8
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.3/Ullim-1.2.3.apk",
+    "sha256": "59efcca6dac21fd4d63160105aafbfa63ff4be7e785af15dd4bef82f1740dc91",
+    "size": 389216,
+    "versionCode": 9
   }
 }
