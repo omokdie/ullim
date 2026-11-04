@@ -2,12 +2,32 @@
  "meta": {
   "ntfy": {
    "ids": [
-    "k2jQlF3ihSKb"
+    "d21RTUGGajZj"
    ],
-   "time": 1793721561
+   "time": 1793779534
   }
  },
- "songs": {},
- "updated": "2026-11-03T16:00:11Z",
+ "songs": {
+  "meghantrainor|metoo": {
+   "artist": "Meghan Trainor",
+   "avoid": [
+    583262
+   ],
+   "pick": 12141215,
+   "title": "Me Too",
+   "updated": "2026-11-04",
+   "votes": {
+    "12141215": [
+     "a:4f3b70c8c1a342b5"
+    ]
+   },
+   "wrong": {
+    "583262": [
+     "a:4f3b70c8c1a342b5"
+    ]
+   }
+  }
+ },
+ "updated": "2026-11-04T08:21:28Z",
  "version": 1
 }
