@@ -6,7 +6,7 @@ A=$ROOT/android
 BT=${BT:-/home/claude/dl/x/bt/build-tools/34.0.4}
 JAR=${JAR:-/home/claude/dl/x/sdk/android-sdk/platforms/android-33/android.jar}
 OUT=$ROOT/build/android
-VER=1.1.0
+VER=1.1.1
 APK=$ROOT/dist/Ullim-$VER.apk
 
 rm -rf "$OUT"; mkdir -p "$OUT"/{gen,classes,dex,assets/www} "$ROOT/dist" "$A/keystore"
@@ -16,7 +16,7 @@ echo "[1/7] 리소스 컴파일"
 "$BT/aapt2" compile --dir "$A/res" -o "$OUT/res.zip"
 echo "[2/7] 리소스 링크 + 매니페스트"
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$JAR" --manifest "$A/AndroidManifest.xml" --java "$OUT/gen" \
-  -A "$OUT/assets" --min-sdk-version 24 --target-sdk-version 34 --version-code 4 --version-name "$VER" "$OUT/res.zip"
+  -A "$OUT/assets" --min-sdk-version 24 --target-sdk-version 34 --version-code 5 --version-name "$VER" "$OUT/res.zip"
 echo "[3/7] 자바 컴파일"
 javac --release 8 -encoding UTF-8 -Xlint:-options -cp "$JAR" -d "$OUT/classes" $(find "$A/src" -name '*.java') $(find "$OUT/gen" -name '*.java') 2>&1 | grep -v JAVA_TOOL_OPTIONS || true
 [ -f "$OUT/classes/kr/ullim/player/MainActivity.class" ] || { echo "javac failed"; exit 1; }

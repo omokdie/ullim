@@ -15,7 +15,8 @@
 | 6 | 가사가 없는 곡은 사용자가 찾아 고르면 자동 지정 + 피드백 자동 전달, 다른 사람에게도 표시 | ✅ 앱 → ntfy.sh(익명) → Actions(30분) → 공용 목록 → 모든 앱(2시간) |
 | 7 | 1.0.2: 있는 노래인데 가사 못 찾음 · 인터넷 되는데 연결 안 됨 | ✅ LRCLIB 503 다시 묻기 · 이름 맞추기 (아래 1.0.2 절) |
 | 8 | 1.1.0: 플레이리스트를 만들고 관리 | ✅ 여러 플레이리스트 · 편집(여러 곡 · 끌어서 순서) · 관리 창 · PC M3U |
-| 9 | 1.1.0: 이미 받은 사람들(PC · 안드로이드)도 자동 업데이트 | ✅ 1.1.0 부터 (아래 절). 1.0.x 는 업데이트 기능이 없어 1.1.0 만 한 번 직접 설치 |
+| 9 | 1.1.0: 이미 받은 사람들(PC · 안드로이드)도 자동 업데이트 | ✅ PC 는 자동 설치. 안드로이드는 1.1.1 부터 알림 + [받기](브라우저) — 아래 1.1.1 절 |
+| 10 | 1.1.1: 안드로이드에서 '유해한 앱'이라 설치가 안 됨 | ✅ 1.1.0 의 앱 내 APK 설치 기능(REQUEST_INSTALL_PACKAGES 등) 제거 → 권한이 1.0.2 와 같아짐 |
 
 ## 2. 구조 요약
 
@@ -81,7 +82,7 @@ APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관�
   프로세스 실행(윈도우 종료 · 로그오프 중이면 안 함) · '지금 다시 시작' 은 `/S /RELAUNCH`. 설치 프로그램(ullim.nsi)은 조용한 설치일 때 앱이
   스스로 닫힐 때까지 최대 10초 기다린 뒤에만 강제로 닫고(설정 저장 보호), 지운 바탕 화면 바로 가기는 다시 만들지 않고, /RELAUNCH 면 새 버전 실행.
   시작 5초 뒤 지난 버전 설치 파일 · 받다 만 파일 정리. 시험용 `ULLIM_UPDATE_TEST=<주소>/` (받는 곳 바꾸기 + 설치 대신 ran.json 기록).
-- Android `Updater.java`: cacheDir/update 에 받기 → SHA-256 · `getPackageArchiveInfo`(같은 패키지 · 더 큰 versionCode) 확인 →
+- (1.1.0 만, 1.1.1 에서 제거) Android `Updater.java`: cacheDir/update 에 받기 → SHA-256 · `getPackageArchiveInfo`(같은 패키지 · 더 큰 versionCode) 확인 →
   [설치] 때 PackageInstaller 세션(`setRequireUserAction(NOT_REQUIRED)`, 권한 `REQUEST_INSTALL_PACKAGES` · `UPDATE_PACKAGES_WITHOUT_USER_ACTION`).
   '이 출처 허용'이 꺼져 있으면 설정 화면 → 돌아오면(onResume) JS `__ullimUpdatePermission` 으로 이어서 설치. 결과는 내부 수신기
   `Updater$StatusReceiver` → JS `__ullimUpdateResult`. 확인 창이 필요하면 화면이 앞에 있을 때만 띄우고 아니면 취소(-1). 새 버전으로 바뀌면
@@ -89,6 +90,16 @@ APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관�
   재생 중이 아닐 때 뒤로 가기로 나가면 조용히만 설치 시도(12+ · 허용된 경우, 아니면 아무것도 안 함).
 - 시험: `test/electron_update_test.js`(실제 Electron + 가짜 GitHub), `test/android_update_test.py`(가짜 브리지로 JS 흐름). 안드로이드 네이티브
   설치 흐름은 실기기가 없어 컴파일 · dex · 매니페스트까지만 확인 → 실제 기기에서 1.1.0 → 다음 버전으로 처음 업데이트할 때 확인 필요.
+
+### 1.1.1 — 안드로이드 '유해한 앱 차단됨' (Play 프로텍트)
+- 사용자 확인: 1.0.x 는 설치됐고 **1.1.0 APK 만** 설치가 막힘. 1.1.0 에서 새로 넣은 것 = `REQUEST_INSTALL_PACKAGES` ·
+  `UPDATE_PACKAGES_WITHOUT_USER_ACTION` 권한 + 앱이 APK 를 내려받아 PackageInstaller 로 설치하는 코드(Updater.java) → 알려진 악성 앱
+  '드로퍼' 모양이라 Play 프로텍트가 PHA(유해) 로 분류한 것으로 판단. 1.1.1 은 이것을 모두 빼서 권한 목록이 1.0.2 와 똑같음.
+- 안드로이드 업데이트는 이제 확인 + 알림만: update/latest.json 의 versionCode 가 더 크면 목록 위 알림 [받기] → `openUrl` 로 릴리스의 APK 주소를
+  브라우저에서 열기(받은 파일을 사용자가 눌러 설치). [×] 로 그 버전 알림 숨김(`S.updHidden`), '업데이트 확인'을 누르면 다시 보임.
+- 그래도 막히면: Play 프로텍트 이의 신청 https://support.google.com/googleplay/android-developer/contact/protectappeals (개발자가 APK 주소 ·
+  패키지 kr.ullim.player · 서명 인증서 SHA-256 을 적어 냄). 2026-09 부터 일부 나라, 2027 부터 전 세계로 '개발자 인증'이 단계적으로 필요해지는
+  계획이 있음 — 한국 적용 시점이 오면 Android Developer Console 등록이 필요할 수 있음.
 
 ### 1.0.2 — 가사를 못 찾던 문제 (실제 LRCLIB 로 확인)
 - LRCLIB 이 요청의 30~50%를 `503 ServerOverloaded`(Retry-After: 1)로 돌려보냄(2026-11 기준, 더 엄격한 요청 한도 도입). 1.0.1 은 이를

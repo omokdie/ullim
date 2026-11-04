@@ -68,7 +68,9 @@ xvfb-run -a node test/electron_update_test.js <electron> build/desktop-app     #
    ```
    설치된 앱(1.1.0+)이 시작 12초 뒤 · 6시간마다 이 파일을 읽어 새 버전을 받아요. 릴리스 파일 이름은 반드시
    `v<버전>/Ullim-Setup-<버전>.exe`, `v<버전>/Ullim-<버전>.apk` (앱이 이 모양의 주소만 받음). 올린 파일을 바꾸면 이 파일도 다시 만들어야 해요(SHA-256).
-   APK 는 `--version-code` 를 올리고 **같은 키**로 서명해야 설치돼요.
+   APK 는 `--version-code` 를 올리고 **같은 키**로 서명해야 설치돼요. 안드로이드 앱은 알림만 하고 사용자가 브라우저로 받아 설치해요.
+   **안드로이드 권한을 늘리지 마세요** — 특히 `REQUEST_INSTALL_PACKAGES`(앱이 다른 APK 설치)를 넣었던 1.1.0 은 Play 프로텍트가
+   '유해한 앱'으로 막았어요. 새 권한이 필요하면 빌드 뒤 `aapt2 dump permissions dist/Ullim-<버전>.apk` 를 이전 버전과 비교해 보세요.
 
 APK 서명 키(`android/keystore/`)는 저장소에 없으니, 새 작업 환경에서 APK 를 빌드할 때는 보관해 둔 키 파일 두 개를 그 폴더에 다시 넣어야 합니다.
 (키 없이 빌드하면 새 키가 만들어져, 기존 사용자는 앱을 지우고 다시 설치해야 합니다)

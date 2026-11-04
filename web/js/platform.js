@@ -102,12 +102,9 @@ function androidPlatform() {
     release: keys => { try { A.release(JSON.stringify(keys)); } catch (e) { /* noop */ } },
     exit: () => { try { A.exitApp(); } catch (e) { /* noop */ } },
     ready: () => { try { A.ready(); } catch (e) { /* noop */ } },
+    // 새 버전 알림만 (받기 · 설치는 브라우저 → 안드로이드 설치 화면)
     update: {
       versionCode: () => { try { return Number(A.versionCode()) || 0; } catch (e) { return 0; } },
-      download: (url, sha256, size, version) => call('updateDownload', url, sha256, size, version),
-      install: () => call('updateInstall'),            // 'started' | 'need-permission'
-      installQuiet: () => call('updateInstall', true), // 안드로이드 12+ 에서 확인 창 없이 설치할 수 있을 때만 (아니면 'skip')
-      discard: () => call('updateDiscard'),
     },
   };
 }

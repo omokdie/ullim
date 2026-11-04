@@ -8,7 +8,7 @@ import { ICONS, icon } from './icons.js';
 import { fetchLatest, isNewer } from './update.js';
 import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO, LookupError, cacheShrink } from './lyrics.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const $ = id => document.getElementById(id);
 const app = $('app');
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -44,7 +44,7 @@ const DEF_EQ = () => ({ on: false, preset: 'flat', p: Object.fromEntries([['prea
 const S = Object.assign({
   volume: 0.8, muted: false, repeat: 'all', shuffle: false, crossfade: 0, theme: 'system', accent: 'blue',
   fxOn: true, fx: { limiter: { on: true, p: defaultParams(FX_BY_ID.limiter) } }, eq: DEF_EQ(), preset: null,
-  resume: true, lastKey: null, lastPos: 0, tab: 'list', lyrAuto: true, lyrShare: true, lyrSize: 20, autoUpdate: true, lastVersion: null,
+  resume: true, lastKey: null, lastPos: 0, tab: 'list', lyrAuto: true, lyrShare: true, lyrSize: 20, autoUpdate: true, lastVersion: null, updHidden: null,
 }, load(LS.set, {}));
 if (!S.eq || !S.eq.p) S.eq = DEF_EQ();
 if (!S.fx) S.fx = {};
@@ -1269,7 +1269,7 @@ function renderSettings() {
       srow('인터넷에서 가사 자동으로 찾기', '곡이 바뀌면 제목 · 가수 · 앨범 · 길이로 LRCLIB(lrclib.net)와 다른 사용자들이 고른 가사 목록에서 찾아요', switchEl(S.lyrAuto, v => { S.lyrAuto = v; saveSettings(); }, '가사 자동으로 찾기')),
       srow('내가 고른 가사를 다른 사용자와 나누기', '직접 고르거나 틀렸다고 한 가사를 자동으로 알려, 여러 사람이 고른 가사가 모두의 앱에 나와요. 곡 제목 · 가수 · 길이와 가사 번호만 익명으로 보내요.', switchEl(S.lyrShare, v => { S.lyrShare = v; saveSettings(); if (v) flushFeedback().catch(() => {}); }, '고른 가사 나누기'))),
     platform.update ? el('div', { class: 'sgroup' }, el('h3', {}, '업데이트'),
-      srow('자동 업데이트', platform.name === 'android' ? '새 버전을 알아서 받아 두고, [설치]만 누르면 돼요' : '새 버전을 알아서 받아 두었다가 앱을 닫을 때 설치해요',
+      srow('자동 업데이트', platform.name === 'android' ? '새 버전이 나오면 알려 줘요 — [받기]를 누르면 브라우저에서 받아 설치해요' : '새 버전을 알아서 받아 두었다가 앱을 닫을 때 설치해요',
         switchEl(S.autoUpdate, v => { S.autoUpdate = v; saveSettings(); if (v) checkUpdate(); else discardUpdate(); }, '자동 업데이트')),
       srow(`지금 버전 ${VERSION}`, updateHint(), el('button', { class: 'btn', id: 'updCheckBtn', onclick: () => checkUpdate({ manual: true }) }, '업데이트 확인'))) : '',
     el('div', { class: 'sgroup' }, el('h3', {}, '화면'),
@@ -1679,11 +1679,6 @@ window.__ullimBack = () => {
   if (EDIT.on) { exitEdit(); return true; }
   if (!$('searchBox').hidden) { $('btnSearch').click(); return true; }
   if (narrow() && S.tab !== 'list') { setTab('list'); return true; }
-  // 앱을 나갈 때 아무것도 재생 중이 아니면 받아 둔 업데이트를 조용히 설치 (안드로이드 12+ · 이미 허용한 경우만)
-  if (UPD.state === 'ready' && S.autoUpdate && !isPlaying() && platform.update && platform.update.installQuiet) {
-    flush();
-    platform.update.installQuiet().then(r => { if (r === 'started') { UPD.state = 'installing'; renderUpdate(); } }).catch(() => {});
-  }
   return false;
 };
 const flush = () => { S.lastPos = P.index >= 0 ? engine.deck.a.currentTime || 0 : 0; store(LS.set, S); savePlaylists(); };
@@ -1722,36 +1717,48 @@ async function init() {
   }
 }
 
-/* ======================= 자동 업데이트 ======================= */
-const UPD = { state: 'idle', version: null, notes: '', err: '' };   // idle · checking · downloading · ready · installing · latest · error
+/* ======================= 자동 업데이트 =======================
+   Windows: 새 설치 파일을 받아 두었다가 앱을 닫을 때 조용히 설치 (또는 '지금 다시 시작').
+   Android: 새 버전이 나오면 알려 주고 [받기] → 브라우저가 GitHub 릴리스의 APK 를 받음 → 받은 파일을 눌러 설치.
+   (앱이 직접 APK 를 내려받아 설치하는 기능은 Play 프로텍트가 '유해한 앱'으로 막아서 1.1.1 부터 쓰지 않음) */
+const UPD = { state: 'idle', version: null, notes: '', url: '', err: '' };   // idle · checking · downloading · ready · available · installing · latest · error
+const ANDROID_UPD = () => platform.name === 'android';
 function updateHint() {
   const v = UPD.version;
   return UPD.state === 'checking' ? '새 버전을 확인하는 중이에요…'
     : UPD.state === 'downloading' ? `새 버전 ${v}을(를) 받는 중이에요…`
-    : UPD.state === 'ready' ? (platform.name === 'android' ? `새 버전 ${v} 준비됨 — [설치]를 눌러 주세요` : `새 버전 ${v} 준비됨 — 앱을 닫으면 설치돼요`)
+    : UPD.state === 'ready' ? `새 버전 ${v} 준비됨 — 앱을 닫으면 설치돼요`
+    : UPD.state === 'available' ? `새 버전 ${v}이(가) 나왔어요 — [받기]를 누르면 브라우저에서 받아요`
     : UPD.state === 'installing' ? '설치하는 중이에요…'
     : UPD.state === 'latest' ? '최신 버전이에요'
     : UPD.state === 'error' ? '업데이트를 확인하지 못했어요 (인터넷 연결을 확인해 주세요)'
     : 'GitHub 에서 새 버전을 확인해요';
 }
 function renderUpdate() {
-  const bar = $('updBar'), android = platform.name === 'android';
-  const show = UPD.state === 'ready' || UPD.state === 'installing';
+  const bar = $('updBar');
+  const show = (UPD.state === 'available' && S.updHidden !== UPD.version) || UPD.state === 'ready' || UPD.state === 'installing';
   bar.hidden = !show;
   if (show) {
-    const busy = UPD.state === 'installing';
-    const act = android
-      ? el('button', { class: 'btn primary', disabled: busy, onclick: installUpdate }, busy ? '설치 중…' : '설치')
-      : el('button', { class: 'btn primary', disabled: busy, onclick: restartForUpdate }, '지금 다시 시작');
-    bar.replaceChildren(icon('import'),
-      el('div', { class: 'tx' }, el('b', {}, `새 버전 ${UPD.version}`),
-        el('span', {}, busy ? (android ? ' 설치하는 중 — 끝나면 알림을 눌러 다시 열어 주세요' : ' 설치하는 중…')
-          : android ? ' 받아 두었어요' : ' — 닫으면 자동으로 설치돼요')),
-      act);
+    if (UPD.state === 'available') {
+      bar.replaceChildren(icon('import'),
+        el('div', { class: 'tx' }, el('b', {}, `새 버전 ${UPD.version}`), el('span', {}, ' 나왔어요')),
+        el('button', { class: 'btn primary', onclick: openUpdateDownload }, '받기'),
+        el('button', { class: 'ib', title: '이 버전은 알리지 않기', 'aria-label': '이 버전은 알리지 않기', onclick: () => { S.updHidden = UPD.version; saveSettings(); renderUpdate(); } }, icon('close')));
+    } else {
+      const busy = UPD.state === 'installing';
+      bar.replaceChildren(icon('import'),
+        el('div', { class: 'tx' }, el('b', {}, `새 버전 ${UPD.version}`), el('span', {}, busy ? ' 설치하는 중…' : ' — 닫으면 자동으로 설치돼요')),
+        el('button', { class: 'btn primary', disabled: busy, onclick: restartForUpdate }, '지금 다시 시작'));
+    }
   }
   const btn = document.getElementById('updCheckBtn');
   const sm = btn && btn.closest('.srow') && btn.closest('.srow').querySelector('small');
   if (sm) sm.textContent = updateHint();
+}
+function openUpdateDownload() {
+  if (!UPD.url) return;
+  platform.openExternal(UPD.url);
+  toast('브라우저에서 받은 뒤, 받은 파일을 눌러 설치해 주세요 (재생목록 · 설정은 그대로예요)');
 }
 function restartForUpdate() {
   if (UPD.state !== 'ready') return;
@@ -1770,36 +1777,25 @@ async function checkUpdate({ manual = false } = {}) {
   UPD.state = 'checking'; renderUpdate();
   try {
     const m = await fetchLatest();
-    const newer = m.file && (platform.name === 'android' ? Number(m.file.versionCode) > platform.update.versionCode() : isNewer(m.version, VERSION));
+    const newer = m.file && (ANDROID_UPD() ? Number(m.file.versionCode) > platform.update.versionCode() : isNewer(m.version, VERSION));
     if (!newer) { UPD.state = 'latest'; renderUpdate(); if (manual) toast('지금이 최신 버전이에요'); return; }
-    UPD.version = m.version; UPD.notes = m.notes;
+    UPD.version = m.version; UPD.notes = m.notes; UPD.url = m.file.url;
+    if (ANDROID_UPD()) {
+      if (manual && S.updHidden === m.version) { S.updHidden = null; saveSettings(); }   // 직접 확인하면 숨겼던 알림도 다시
+      UPD.state = 'available'; renderUpdate();
+      if (manual || S.updHidden !== m.version) toast(`새 버전 ${m.version}이(가) 나왔어요 — 목록 위 [받기]를 눌러 주세요`);
+      return;
+    }
     UPD.state = 'downloading'; renderUpdate();
     if (manual) toast(`새 버전 ${m.version}을(를) 받는 중이에요`);
     await platform.update.download(m.file.url, m.file.sha256, Number(m.file.size), m.version);
     UPD.state = 'ready'; renderUpdate();
-    toast(platform.name === 'android' ? `새 버전 ${m.version}을(를) 받아 두었어요 — [설치]를 누르면 업데이트돼요` : `새 버전 ${m.version}을(를) 받아 두었어요 — 앱을 닫으면 설치돼요`);
+    toast(`새 버전 ${m.version}을(를) 받아 두었어요 — 앱을 닫으면 설치돼요`);
   } catch (e) {
     UPD.state = 'error'; UPD.err = String((e && e.message) || e); renderUpdate();
     if (manual) toast('업데이트를 확인하지 못했어요');
   }
 }
-async function installUpdate() {
-  if (UPD.state !== 'ready') return;
-  UPD.state = 'installing'; renderUpdate();
-  try {
-    const r = await platform.update.install();
-    if (r === 'need-permission') {
-      UPD.state = 'ready'; renderUpdate();
-      toast("처음 한 번만: '이 출처 허용'을 켜고 돌아오면 설치가 이어져요");
-    } else if (r !== 'started') { UPD.state = 'ready'; renderUpdate(); }
-  } catch (e) { UPD.state = 'ready'; renderUpdate(); toast('설치를 시작하지 못했어요'); }
-}
-window.__ullimUpdatePermission = ok => {
-  if (ok) installUpdate();
-  else toast("'이 출처 허용'을 켜야 업데이트를 설치할 수 있어요");
-};
-// 안드로이드 설치 결과: 0 성공(보통 그 전에 앱이 새 버전으로 바뀜) · 3 사용자가 취소 · 음수 = 조용히 미룸 · 그 밖은 실패
-window.__ullimUpdateResult = st => { if (st !== 0) { UPD.state = 'ready'; renderUpdate(); if (st > 0 && st !== 3) toast('업데이트를 설치하지 못했어요'); } };
 init();
 
 // 개발 · 테스트용
