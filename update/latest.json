@@ -1,15 +1,15 @@
 {
-  "version": "1.2.0",
-  "notes": "새 화면(홈 · 리퀴드 글라스) · 한국 노래 가사 더 잘 찾기 · 싱크 없는 가사 자동 맞춤",
+  "version": "1.2.1",
+  "notes": "리퀴드 글라스 로고 · 휴대폰에서 좌우로 밀어 화면 옮기기 · 재생 중 테두리 잘림 수정",
   "windows": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.0/Ullim-Setup-1.2.0.exe",
-    "sha256": "028d205d1a43f6e5bb72caeda001ef45bfb0c60d8b680b22b511c6f65cab0f8a",
-    "size": 104506839
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.1/Ullim-Setup-1.2.1.exe",
+    "sha256": "a7a5175e54d7768693d1160306ecbdc2efb006644d01f3628d2453cf222cd195",
+    "size": 104799364
   },
   "android": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.0/Ullim-1.2.0.apk",
-    "sha256": "b224cc1616c9a5ba08b189608f8cc3b0fea2947cbbef59d0550e1df46da38db2",
-    "size": 338783,
-    "versionCode": 6
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.2.1/Ullim-1.2.1.apk",
+    "sha256": "c2d4d65637b8365a51764fd2034335e35f1bbd5f0b2dee67a9c7e9132e21b935",
+    "size": 863943,
+    "versionCode": 7
   }
 }
