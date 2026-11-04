@@ -116,6 +116,13 @@ input, select { font: inherit; color: inherit; }
 .scroller { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; padding: var(--top-h) 28px 0 18px; overscroll-behavior: contain; scrollbar-width: thin; }
 .tailpad { height: calc(var(--bar-h) + var(--gap) * 2 + 28px); }
 .view { position: relative; }
+/* 휴대폰: 좌우로 밀어 화면 옮기기 */
+.view.swiping { will-change: transform; }
+.view.snap { transition: transform .18s ease-out, opacity .18s ease-out; }
+@keyframes viewInR { from { transform: translateX(24%); opacity: .35; } to { transform: none; opacity: 1; } }
+@keyframes viewInL { from { transform: translateX(-24%); opacity: .35; } to { transform: none; opacity: 1; } }
+.view.in-r { animation: viewInR .24s cubic-bezier(.2, .8, .2, 1); }
+.view.in-l { animation: viewInL .24s cubic-bezier(.2, .8, .2, 1); }
 
 .pbar {
   position: fixed; z-index: 8; left: var(--gap); right: var(--gap); bottom: var(--gap); height: var(--bar-h); border-radius: 26px;
@@ -224,7 +231,11 @@ select.sel option { background: var(--solid); }
 }
 .ptile .pplay .i { width: 20px; height: 20px; }
 .ptile:hover .pplay, .ptile:focus-within .pplay { opacity: 1; transform: none; }
-.ptile.playing .mosaic { box-shadow: 0 0 0 2px var(--accent); }
+.ptile .mosaic::after { content: ''; position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .07); }
+/* 재생 중 테두리는 그림 안쪽에 (옆으로 밀리는 줄이 바깥을 잘라 내지 않게) */
+.ptile.playing .mosaic::after { box-shadow: inset 0 0 0 2.5px var(--accent), inset 0 0 0 4px rgba(0, 0, 0, .25); }
+.ptile:focus-visible { outline: none; }
+.ptile:focus-visible .mosaic::after { box-shadow: inset 0 0 0 2.5px var(--text); }
 .ptile.playing .nm { color: var(--accent); }
 .ptile.new .mosaic { background: none; border: 1.5px dashed var(--line2); }
 .ptile.new .fb { color: var(--muted); }
@@ -622,4 +633,4 @@ body.pl-open .side, body.pl-open .main { visibility: hidden; }
   .chips::-webkit-scrollbar { display: none; }
   .chip { flex: none; }
 }
-@media (prefers-reduced-motion: reduce) { .player, .toast, .ptile .pplay { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .player, .toast, .ptile .pplay, .view.snap { transition: none; } .view.in-r, .view.in-l { animation: none; } }

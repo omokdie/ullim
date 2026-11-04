@@ -11,7 +11,7 @@ import { thumb, peek, setSource as setThumbSource, setTagSink, forgetPending, fa
 import { autoSync, saveAnchors, applyAnchors } from './autosync.js';
 import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO, LookupError, cacheShrink } from './lyrics.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const $ = id => document.getElementById(id);
 const app = $('app');
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -620,7 +620,11 @@ function renderTransport() {
   $('pFrom').onclick = () => { if (playPl) { closePlayer(); showPlaylist(playPl); } };
   $('pMore').onclick = e => playerMenu(rectOf(e.currentTarget));
   document.querySelectorAll('[data-ptab]').forEach(b => b.addEventListener('click', () => setPlayerTab(PL.tab === b.dataset.ptab && narrow() ? null : b.dataset.ptab)));
-  document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
+  document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => {
+    const from = TABS.indexOf(NAV.view === 'list' ? 'home' : NAV.view), to = TABS.indexOf(b.dataset.go);
+    go(b.dataset.go);
+    if (narrow() && from >= 0 && to >= 0 && from !== to) slideIn(to > from ? 1 : -1);   // 아래 메뉴로 옮길 때도 밀기와 같은 방향으로
+  }));
   $('btnBack').onclick = () => back();
   $('btnAdd').onclick = e => addMenu(rectOf(e.currentTarget), target(), { create: NAV.view !== 'list' });
   $('btnFind').onclick = () => toggleSearch();
@@ -742,6 +746,73 @@ function go(viewName, { pl = null, push = true } = {}) {
   if (v === 'list') { measureList(); renderRows(); }
   onScroll();
 }
+/* 휴대폰: 좌우로 밀어 아래 메뉴 화면(홈 · 음장 · EQ · 설정) 사이를 옮기기.
+   옆으로 밀리는 줄(플레이리스트 타일 · 장르 카드 · 칩) · 슬라이더 · 순서 바꾸기 손잡이 위에서는 하지 않음, 화면 가장자리는 안드로이드 뒤로 가기 몸짓 */
+const TABS = ['home', 'fx', 'eq', 'set'];
+function slideIn(dir) {
+  const v = $(VIEWS[NAV.view]);
+  v.classList.remove('in-l', 'in-r'); void v.offsetWidth;
+  v.classList.add(dir > 0 ? 'in-r' : 'in-l');
+  v.addEventListener('animationend', () => v.classList.remove('in-l', 'in-r'), { once: true });
+}
+(() => {
+  const main = $('main');
+  let sw = null;
+  const scrollerX = node => {         // 옆으로 밀리는 줄 (플레이리스트 타일 · 장르 카드 · 칩)
+    for (let n = node; n && n !== main; n = n.parentElement) {
+      if (n.scrollWidth > n.clientWidth + 2) { const ox = getComputedStyle(n).overflowX; if (ox === 'auto' || ox === 'scroll') return n; }
+    }
+    return null;
+  };
+  const targetOf = dir => {          // dir: +1 = 다음 화면 (왼쪽으로 밀기), -1 = 이전 화면
+    if (NAV.view === 'list') return dir < 0 ? 'back' : 'fx';
+    const i = TABS.indexOf(NAV.view);
+    return i < 0 ? null : TABS[i + dir] || null;
+  };
+  const reset = v => { v.classList.remove('swiping'); v.style.transform = ''; v.style.opacity = ''; };
+  main.addEventListener('touchstart', e => {
+    sw = null;
+    if (!narrow() || e.touches.length !== 1 || EDIT.on || DRAG || openModal || openMenuClose || PL.open) return;
+    const t = e.touches[0], tg = e.target;
+    if (!tg.closest || tg.closest('input, select, textarea, .vs, .grip, .menu, .topbar')) return;
+    if (t.clientX < 20 || t.clientX > innerWidth - 20) return;
+    sw = { x: t.clientX, y: t.clientY, t: Date.now(), mode: null, dx: 0, view: $(VIEWS[NAV.view]), sx: scrollerX(tg) };
+  }, { passive: true });
+  main.addEventListener('touchmove', e => {
+    if (!sw || e.touches.length !== 1) return;
+    const t = e.touches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y;
+    if (!sw.mode) {
+      if (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy) * 1.6) {
+        // 옆으로 밀리는 줄 위라면 그 줄이 더 밀릴 수 있을 때는 줄을 밀고, 끝에 닿아 있을 때만 화면을 옮김
+        const sx = sw.sx;
+        if (sx && (dx < 0 ? sx.scrollLeft < sx.scrollWidth - sx.clientWidth - 2 : sx.scrollLeft > 2)) { sw = null; return; }
+        sw.mode = 'h';
+      } else { if (Math.abs(dy) > 12) sw = null; return; }
+    }
+    sw.dx = dx;
+    const shift = targetOf(dx < 0 ? 1 : -1) ? dx * 0.5 : dx * 0.12;     // 더 갈 곳이 없으면 조금만 (끝이라는 느낌)
+    sw.view.classList.add('swiping');
+    sw.view.style.transform = `translateX(${shift}px)`;
+    sw.view.style.opacity = String(1 - Math.min(0.35, Math.abs(shift) / innerWidth));
+  }, { passive: true });
+  const end = () => {
+    const s = sw; sw = null;
+    if (!s || s.mode !== 'h') return;
+    const dt = Math.max(1, Date.now() - s.t), dir = s.dx < 0 ? 1 : -1;
+    const far = Math.abs(s.dx) > innerWidth * 0.22 || (Math.abs(s.dx) > 40 && Math.abs(s.dx) / dt > 0.45);
+    const target = far ? targetOf(dir) : null;
+    if (!target) {
+      s.view.classList.remove('swiping'); s.view.classList.add('snap'); s.view.style.transform = ''; s.view.style.opacity = '';
+      setTimeout(() => s.view.classList.remove('snap'), 220);
+      return;
+    }
+    reset(s.view);
+    if (target === 'back') back(); else go(target);
+    slideIn(dir);
+  };
+  main.addEventListener('touchend', end, { passive: true });
+  main.addEventListener('touchcancel', () => { const s = sw; sw = null; if (s && s.mode === 'h') { s.view.classList.add('snap'); reset(s.view); setTimeout(() => s.view.classList.remove('snap'), 220); } }, { passive: true });
+})();
 function back() {
   if (NAV.stack.length) { go(NAV.stack.pop(), { push: false }); return true; }
   if (NAV.view !== 'home') { go('home'); return true; }

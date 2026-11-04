@@ -17,6 +17,7 @@
 ## 빌드
 
 ```bash
+python3 build/make_icons.py      # (로고를 바꿀 때만) 모든 아이콘 다시 그리기 — --preview 로 미리 보기
 bash build/build_windows.sh      # build/win/Ullim  (Electron win32-x64 + 앱, Ullim.exe 아이콘·버전 정보)
 bash build/build_installer.sh    # dist/Ullim-Setup-<버전>.exe  (NSIS, 약 5분)
 bash build/build_android.sh      # dist/Ullim-<버전>.apk        (aapt2 · javac · d8 · zipalign · apksigner)
