@@ -44,6 +44,12 @@ v1.0.1 은 사용자 허락을 받아 **사용자 PC 의 Claude 앱 브라우저
 2. 릴리스 작성 페이지에서 JS 로 `raw.githubusercontent.com/<커밋>/…` 조각을 받아 합치고 SHA-256 확인 → `file-attachment.attach(DataTransfer)` 로 첨부
 3. 태그 `v1.0.1`(main) · 제목 · 설명 입력 → Publish. 공개 다운로드 APK 해시가 빌드와 같음을 확인.
 임시 브랜치 `release-upload-tmp` 는 이 세션에서 지울 수 없어 남아 있음(사용자 확인 후 웹에서 삭제).
+v1.0.2 · v1.1.0 도 같은 방법. 주의할 점 (v1.1.0 때 겪음):
+- 첨부는 `document.querySelector('file-attachment.js-upload-release-file').attach(dt)` — 첫 번째 `file-attachment` 는 설명 칸(그림용)이라 거부됨.
+  첨부하면 GitHub 가 untagged 초안을 만들어 파일을 올림(`is-uploading` 클래스가 빠지면 끝).
+- 태그: Tag 버튼 → **Create new tag** → 대화상자에 `v<버전>` → Create (게시할 때 main 에서 만들어짐).
+- 첫 Publish 가 회색으로 멈추고 아무것도 안 되면: **Save draft** → 릴리스 목록의 초안 편집 페이지를 새로 열기 → Publish.
+- 확인: `gh api repos/omokdie/ullim/releases/tags/v<버전>` 의 assets[].digest(sha256) 가 빌드와 같은지. 그다음 RELEASING 4단계(update/latest.json).
 APK 서명 키는 세션 컨테이너에만 있으므로 사용자에게 보관용으로 전달함 — 다음 버전 APK 빌드 때 `android/keystore/` 에 다시 넣어야 함.
 
 ### 1.1.0 — 플레이리스트 여러 개
