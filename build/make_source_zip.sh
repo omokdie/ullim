@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 소스 묶음 (빌드 결과 · 내려받은 도구 · 테스트 음원 제외)
+# 소스 묶음 (빌드 결과 · 내려받은 도구 · 테스트 음원 · APK 서명 키 제외)
 set -euo pipefail
 cd /home/claude
-OUT=/home/claude/ullim/dist/Ullim-1.3.0-source.zip
+OUT=/home/claude/ullim/dist/Ullim-1.3.1-source.zip
 rm -f "$OUT"
 zip -q -r -X "$OUT" \
   ullim/README.md ullim/web ullim/desktop ullim/android ullim/assets ullim/codec \
@@ -10,5 +10,5 @@ zip -q -r -X "$OUT" \
   ullim/test/server.py ullim/test/run_dsp.py ullim/test/dsp-test.html ullim/test/tags-test.html \
   ullim/test/ui_func.py ullim/test/ui_shots.py ullim/test/android_bridge.py ullim/test/electron_test.js \
   ullim/test/codec_test.py ullim/test/make_dsf.mjs ullim/test/preset_level_test.py ullim/test/fx_glitch_test.py ullim/test/recorder-worklet.js \
-  -x '*/__pycache__/*'
+  -x '*/__pycache__/*' -x 'ullim/android/keystore/*'      # 서명 키 · 비밀번호는 절대 넣지 않음
 ls -la "$OUT"

@@ -234,6 +234,11 @@ public class MainActivity extends Activity {
         /** USB DAC 형식: "auto"(최고 품질) · "off"(안드로이드 기본) · "<샘플레이트>/<인코딩>" */
         @JavascriptInterface
         public void setHiRes(final String mode) { a.main.post(() -> { if (a.audioOut != null) a.audioOut.setMode(mode); }); }
+        /** 곡을 길게 눌러 여러 곡 고르기를 시작할 때: 손에 '툭' (권한 필요 없음, 시스템 '터치 진동' 설정을 따름) */
+        @JavascriptInterface
+        public void haptic() {
+            a.main.post(() -> { if (a.web != null) a.web.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); });
+        }
         @JavascriptInterface
         public void exitApp() {
             a.main.post(() -> { PlaybackService.stop(a); a.finishAndRemoveTask(); });
@@ -349,7 +354,7 @@ public class MainActivity extends Activity {
 
     /* ---------------- 파일 · 폴더 · 기기 음악 ---------------- */
     void pickFiles(String id) {
-        if (reqFiles != null) resolve(reqFiles, "[]");
+        if (reqFiles != null) resolve(reqFiles, "null");
         reqFiles = id;
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -362,7 +367,7 @@ public class MainActivity extends Activity {
     }
 
     void pickFolder(String id) {
-        if (reqTree != null) resolve(reqTree, "[]");
+        if (reqTree != null) resolve(reqTree, "null");
         reqTree = id;
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
@@ -397,7 +402,7 @@ public class MainActivity extends Activity {
             final String id = reqFiles;
             reqFiles = null;
             if (id == null) return;
-            if (res != RESULT_OK || data == null) { resolve(id, "[]"); return; }
+            if (res != RESULT_OK || data == null) { resolve(id, "null"); return; }     // 고르지 않고 닫음
             final List<Uri> uris = new ArrayList<>();
             ClipData clip = data.getClipData();
             if (clip != null) { for (int k = 0; k < clip.getItemCount(); k++) uris.add(clip.getItemAt(k).getUri()); }
@@ -412,7 +417,7 @@ public class MainActivity extends Activity {
             final String id = reqTree;
             reqTree = null;
             if (id == null) return;
-            if (res != RESULT_OK || data == null || data.getData() == null) { resolve(id, "[]"); return; }
+            if (res != RESULT_OK || data == null || data.getData() == null) { resolve(id, "null"); return; }
             final Uri tree = data.getData();
             persist(tree);
             new Thread(() -> {

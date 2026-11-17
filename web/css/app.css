@@ -336,11 +336,17 @@ select.sel option { background: var(--solid); }
 .row.cur .t1 { color: var(--accent); font-weight: 700; }
 .row.bad .t1 { color: var(--faint); text-decoration: line-through; }
 .listpane.editing .row { grid-template-columns: 28px 44px minmax(0, 1fr) auto 36px; }
+.listpane.editing.ro .row { grid-template-columns: 28px 44px minmax(0, 1fr) auto; padding-right: 14px; }   /* 모든 곡 · 장르 · 최근: ≡ 없음 */
 .row .ck { display: grid; place-items: center; }
 .row .ck .box { width: 20px; height: 20px; border-radius: 6px; border: 2px solid var(--line2); display: grid; place-items: center; }
 .row .ck .box .i { width: 14px; height: 14px; color: var(--ink); }
 .row.sel { background: var(--accent-soft); }
 .row.sel .ck .box { background: var(--accent); border-color: var(--accent); }
+.row.have { cursor: default; }                                   /* 넣을 플레이리스트에 이미 있는 곡 */
+.row.have .ck .box { background: var(--line2); border-color: transparent; }
+.row.have .ck .box .i { color: var(--muted); }
+.row.have .th, .row.have .t1 { opacity: .5; }
+.row.have:hover { background: none; }
 .row .grip { width: 34px; height: 44px; display: grid; place-items: center; color: var(--muted); cursor: grab; touch-action: none; border-radius: 10px; }
 .row .grip:hover { color: var(--text); background: var(--line); }
 .row .grip .i { width: 19px; height: 19px; }
@@ -350,13 +356,32 @@ select.sel option { background: var(--solid); }
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 40px 16px; color: var(--muted); }
 .empty b { color: var(--text); font-size: 16px; }
 .empty .tools { justify-content: center; padding-top: 6px; }
+/* 여러 곡 고르기 막대: PC 는 한 줄 (몇 곡 · 모두 선택 … 새 플레이리스트로 · 넣기 · 이동 · 빼기 · 완료) */
 .editbar {
   position: fixed; z-index: 9; left: calc(var(--side-w) + var(--gap) * 2 + 18px); right: calc(var(--gap) + 28px); bottom: calc(var(--bar-h) + var(--gap) * 2);
-  display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; padding: 10px 12px; border-radius: 20px;
+  display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; padding: 9px 10px 9px 16px; border-radius: 20px;
 }
-.editbar .eh { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
-.editbar .n { font-size: 12.5px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.editbar .ea { display: flex; gap: 6px; margin-left: auto; }
+.editbar .eh { display: flex; align-items: center; gap: 8px; flex: 1 1 180px; min-width: 0; }
+.editbar .n { font-size: 13.5px; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editbar .n.hint { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.editbar .ea { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.editbar .ea .sl { display: none; }
+.editbar .ea .btn { white-space: nowrap; }
+.editbar .ea.one .btn { max-width: 340px; }
+.editbar .ea.one .btn, .editbar .ea.one .btn span { overflow: hidden; text-overflow: ellipsis; }
+.editbar .done { flex: none; }
+body.editing .tailpad { height: calc(var(--bar-h) + var(--gap) * 2 + 96px); }     /* 마지막 곡이 막대에 가리지 않게 */
+body.editing .toast { bottom: calc(var(--bar-h) + var(--gap) * 2 + 68px); }
+/* 좁은 PC 창: 한 줄에 다 안 들어가면 두 줄 (위: 몇 곡 · 모두 선택 · 완료, 아래: 단추들을 고르게) */
+@media (min-width: 900px) and (max-width: 1199px) {
+  .editbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "eh done" "ea ea"; gap: 8px; padding: 9px 10px; }
+  .editbar .eh { grid-area: eh; padding-left: 6px; }
+  .editbar .done { grid-area: done; }
+  .editbar .ea { grid-area: ea; flex-wrap: nowrap; }
+  .editbar .ea .btn { flex: 1 1 auto; justify-content: center; min-width: 0; }
+  body.editing .tailpad { height: calc(var(--bar-h) + var(--gap) * 2 + 140px); }
+  body.editing .toast { bottom: calc(var(--bar-h) + var(--gap) * 2 + 112px); }
+}
 
 /* ---------- 재생 화면 (전체) ---------- */
 .player {
@@ -552,6 +577,9 @@ body.pl-open .side, body.pl-open .main { visibility: hidden; }
   padding: 10px 18px; border-radius: 18px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: calc(100% - 32px);
 }
 .toast.show { opacity: 1; transform: translateX(-50%); }
+.toast.show.act { pointer-events: auto; }
+.toast .link { margin-left: 12px; padding: 3px 8px; border-radius: 10px; color: var(--accent); font-size: 13px; font-weight: 750; }
+.toast .link:hover { background: var(--panel2); }
 .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: center; z-index: 40; padding: 20px; }
 .dialog { width: min(380px, 100%); background: var(--solid); border: 1px solid var(--line2); border-radius: 22px; padding: 20px; box-shadow: 0 24px 70px rgba(0, 0, 0, .5); }
 .dialog h3 { margin: 0 0 6px; font-size: 17px; }
@@ -619,6 +647,8 @@ body.pl-open .side, body.pl-open .main { visibility: hidden; }
   .row { grid-template-columns: 44px minmax(0, 1fr) auto 32px; gap: 10px; padding: 0 0 0 2px; }
   .listpane.editing .row { grid-template-columns: 26px 44px minmax(0, 1fr) 36px; }
   .listpane.editing .row .d { display: none; }
+  .listpane.editing.ro .row { grid-template-columns: 26px 44px minmax(0, 1fr) auto; padding-right: 8px; }
+  .listpane.editing.ro .row .d { display: block; }
 
   .bnav {
     position: fixed; z-index: 8; display: grid; grid-template-columns: repeat(4, 1fr); left: 14px; right: 14px;
@@ -647,12 +677,22 @@ body.pl-open .side, body.pl-open .main { visibility: hidden; }
   .pbar .play .i { width: 26px; height: 26px; }
   .pbar .play .pg { width: 30px; height: 30px; }
   .pbar .ib.big .i { width: 25px; height: 25px; }
-  .editbar { left: 10px; right: 10px; bottom: calc(10px + var(--nav-h) + var(--mini-h) + 16px + env(safe-area-inset-bottom)); display: grid; gap: 8px; }
-  .editbar .eh { justify-content: space-between; }
-  .editbar .ea { display: grid; grid-template-columns: 1fr auto auto; margin: 0; }
-  .editbar .ea .btn { justify-content: center; padding: 0 12px; }
+  /* 휴대폰: 위 줄 = 몇 곡 · 모두 선택 · 완료, 아래 줄 = 아이콘 아래 짧은 이름 단추 (새 목록 · 넣기 · 이동 · 빼기) */
+  .editbar {
+    left: 10px; right: 10px; bottom: calc(10px + var(--nav-h) + var(--mini-h) + 16px + env(safe-area-inset-bottom));
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "eh done" "ea ea"; gap: 8px; padding: 10px;
+  }
+  .editbar .eh { grid-area: eh; padding-left: 6px; justify-content: space-between; }
+  .editbar .done { grid-area: done; }
+  .editbar .ea { grid-area: ea; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
+  .editbar .ea .btn { flex-direction: column; justify-content: center; gap: 3px; height: 54px; padding: 0 2px; border-radius: 15px; font-size: 11.5px; }
+  .editbar .ea .btn .i { width: 20px; height: 20px; }
+  .editbar .ea .lb { display: none; }
+  .editbar .ea .sl { display: block; }
+  .editbar .ea.one .btn { flex-direction: row; height: 44px; gap: 6px; font-size: 14px; max-width: none; }
   .toast { bottom: calc(10px + var(--nav-h) + var(--mini-h) + 22px + env(safe-area-inset-bottom)); }
-  body.editing .toast { bottom: calc(10px + var(--nav-h) + var(--mini-h) + 130px + env(safe-area-inset-bottom)); }
+  body.editing .toast { bottom: calc(10px + var(--nav-h) + var(--mini-h) + 158px + env(safe-area-inset-bottom)); }
+  body.editing .tailpad { height: calc(var(--nav-h) + var(--mini-h) + 46px + 128px + env(safe-area-inset-bottom)); }
 
   /* 재생 화면: 위에서부터 그림 · 제목 · 진행 · 버튼 · 탭. 탭을 누르면 그림 자리에 다음 트랙 / 가사 */
   .player { z-index: 20; padding-bottom: 0; touch-action: pan-x; }

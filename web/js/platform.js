@@ -22,6 +22,7 @@ function webPlatform() {
     inp.type = 'file'; inp.multiple = true;
     if (opts.dir) inp.webkitdirectory = true; else inp.accept = 'audio/*,' + AUDIO_EXT.map(e => '.' + e).join(',');
     inp.onchange = () => resolve(fromFiles([...inp.files]));
+    inp.oncancel = () => resolve(null);
     inp.click();
   });
   const fromFiles = files => files.filter(f => isAudioName(f.name) || /^audio\//.test(f.type))
@@ -47,8 +48,8 @@ function electronPlatform() {
     name: 'electron', canScan: true, scanLabel: '음악 폴더', persistent: true,
     mediaUrl: key => 'app://ullim/media?p=' + encodeURIComponent(key),
     tagSource: key => 'app://ullim/media?p=' + encodeURIComponent(key),
-    pickFiles: async () => items(await N.pickFiles()),
-    pickFolder: async () => items(await N.pickFolder()),
+    pickFiles: async () => { const r = await N.pickFiles(); return r == null ? null : items(r); },      // null = 고르지 않고 닫음
+    pickFolder: async () => { const r = await N.pickFolder(); return r == null ? null : items(r); },
     scanLibrary: async () => items(await N.scanMusic()),
     fromDrop: async dt => {
       const paths = [...(dt.files || [])].map(f => N.pathForFile(f)).filter(Boolean);
@@ -110,6 +111,7 @@ function androidPlatform() {
     nowPlaying: info => { try { A.nowPlaying(JSON.stringify(info)); } catch (e) { /* noop */ } },
     setTheme: (bg, light) => { try { A.setSystemBars(bg, !!light); } catch (e) { /* noop */ } },
     release: keys => { try { A.release(JSON.stringify(keys)); } catch (e) { /* noop */ } },
+    haptic: () => { try { A.haptic(); } catch (e) { /* noop */ } },          // 길게 눌러 고르기 시작할 때 '툭' (시스템 터치 진동 설정을 따름)
     exit: () => { try { A.exitApp(); } catch (e) { /* noop */ } },
     ready: () => { try { A.ready(); } catch (e) { /* noop */ } },
     powerSave: () => { try { return !!A.powerSave(); } catch (e) { return false; } },

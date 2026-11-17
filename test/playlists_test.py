@@ -70,13 +70,15 @@ with sync_playwright() as p:
     R['4_added_one'] = S()['pls']
     assert R['4_added_one'] == ['재생목록:5', '출퇴근:1'], R['4_added_one']
 
-    # 5) 편집: 여러 곡 골라 넣기 (이미 있는 곡은 건너뜀)
-    pg.click('#plMenu'); menu('편집')
+    # 5) 여러 곡 선택: 골라 넣기 (이미 있는 곡은 건너뜀) → 넣으면 고르기가 끝남
+    pg.click('#plMenu'); menu('여러 곡 선택')
     for i in (1, 2, 3): pg.click(f'#spacer .row[data-i="{i}"]')
     R['5_editbar'] = pg.text_content('#editBar')
     pg.click('#editBar button:has-text("플레이리스트에 넣기")'); menu('출퇴근'); pg.wait_for_timeout(200)
     R['5_toast'] = pg.text_content('#toast')
-    assert '3곡 선택' in R['5_editbar'] and S()['pls'] == ['재생목록:5', '출퇴근:3'] and "2곡" in R['5_toast'], (R['5_editbar'], S(), R['5_toast'])
+    assert '3곡 선택' in R['5_editbar'] and S()['pls'] == ['재생목록:5', '출퇴근:3'] and "2곡" in R['5_toast'] and '1곡은 이미' in R['5_toast'], (R['5_editbar'], S(), R['5_toast'])
+    assert pg.evaluate("document.getElementById('editBar').hidden")
+    pg.click('#plSelect'); pg.wait_for_timeout(150)                                  # 위 '선택' 단추로 다시 (순서 바꾸기)
 
     # 6) 끌어서 순서 바꾸기: 재생 중인 0번 곡을 3번 자리로 → 재생 위치가 따라감
     playing_key = pg.evaluate('__ullim.list[__ullim.P.index].key')
@@ -98,7 +100,7 @@ with sync_playwright() as p:
     assert R['7_switched']['playing'] == '출퇴근' and R['7_switched']['same'] and R['7_switched']['rows'][0].startswith('*') and R['7_switched']['now'] == '', R['7_switched']
 
     # 8) 안드로이드 파일 권한: 다른 목록에도 있는 곡은 빼도 권한을 돌려주지 않음
-    pg.click('#plMenu'); menu('편집'); pg.click('#editBar button:has-text("모두 선택")'); pg.click('#editBar button:has-text("빼기")'); pg.wait_for_timeout(500)
+    pg.click('#plMenu'); menu('여러 곡 선택'); pg.click('#editBar button:has-text("모두 선택")'); pg.click('#editBar button:has-text("빼기")'); pg.wait_for_timeout(500)
     R['8_removed_all'] = {**S(), 'released': pg.evaluate('__released.slice()')}
     assert R['8_removed_all']['pls'] == ['재생목록:5', '출퇴근:0'] and R['8_removed_all']['released'] == [] and R['8_removed_all']['idx'] == -1, R['8_removed_all']
     openpl('재생목록')
@@ -164,7 +166,7 @@ with sync_playwright() as p:
     pg.set_viewport_size({'width': 390, 'height': 844}); pg.wait_for_timeout(500)   # 화면 크기가 바뀐 뒤 자리 잡을 때까지
     pg.evaluate("__ullim.setTab('list')"); pg.wait_for_timeout(300)
     pg.click('#plMenu')
-    menu('편집'); pg.click('#spacer .row[data-i="0"]'); pg.wait_for_timeout(200)
+    menu('여러 곡 선택'); pg.click('#spacer .row[data-i="0"]'); pg.wait_for_timeout(200)
     pg.screenshot(path='/home/claude/ullim/test/shots/playlists-mobile-edit.png')
     pg.click('#editBar button:has-text("완료")')
     pg.click('#btnBack'); pg.wait_for_timeout(300)

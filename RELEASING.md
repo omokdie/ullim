@@ -54,6 +54,7 @@ python3 test/lyrics_korean_test.py             # 한국 노래: 영어 번역/�
 node test/autosync_test.mjs                    # 자동 싱크 (글자 수 · 머리말 · 맞춘 줄 · 합성 신호 정렬 · 속도)
 node test/autosync_bench.mjs                   # (선택) 자동 싱크 정확도 — JamendoLyrics 79곡이 /home/claude/f90/jamendolyrics 에 있을 때
 python3 test/playlists_test.py                 # 플레이리스트 여러 개 (가짜 안드로이드 연결층 · 저장 · 파일 권한)
+python3 test/multiselect_test.py               # 여러 곡 고르기: 새 플레이리스트 · 넣기 · 이동(듣던 곡 끊김 없음) · 모든 곡에서 골라 넣기 · 길게 누르기
 python3 test/play_glyph_test.py                # 재생 버튼 (울림 표시 ↔ 세모 · 물결 움직임 · 절약 모드) · 밝은/어두운 화면 로고
 python3 test/lyrics_data_test.py               # 가사: 모바일 데이터 · 와이파이 전환 · 설정 · 백그라운드 미루기 + 알림 무작위/반복 (가짜 안드로이드)
 python3 test/thumbs_dedupe_test.py             # 앨범아트: 같은 그림은 한 번만 저장 · 예전 곡별 기록 합치기 (/tmp/ullim-lib — test/make_library.py)

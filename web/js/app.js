@@ -13,7 +13,7 @@ import { thumb, peek, setSource as setThumbSource, setTagSink, forgetPending, fa
 import { autoSync, saveAnchors, applyAnchors } from './autosync.js';
 import { guessQuery, findOnline, searchList, fromRecord, cacheGet, cachePut, cacheDrop, toLyrics, decodeText, loadOverrides, communityFor, getById, sendFeedback, flushFeedback, REPO, LookupError, cacheShrink } from './lyrics.js';
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const $ = id => document.getElementById(id);
 const app = $('app');
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -771,10 +771,10 @@ function renderTransport() {
     if (narrow() && from >= 0 && to >= 0 && from !== to) slideIn(to > from ? 1 : -1);   // 아래 메뉴로 옮길 때도 밀기와 같은 방향으로
   }));
   $('btnBack').onclick = () => back();
-  $('btnAdd').onclick = e => addMenu(rectOf(e.currentTarget), target(), { create: NAV.view !== 'list' });
+  $('btnAdd').onclick = e => addMenu(rectOf(e.currentTarget), target(), { create: true });
   $('btnFind').onclick = () => toggleSearch();
   $('sideNew').onclick = () => createPlaylist();
-  $('searchInput').addEventListener('input', debounce(e => { query = e.target.value; refreshView(); scroller.scrollTop = Math.min(scroller.scrollTop, Math.max(0, listTop - 120)); }, 120));
+  $('searchInput').addEventListener('input', debounce(e => { if (DRAG) DRAG.cancel(); query = e.target.value; refreshView(); scroller.scrollTop = Math.min(scroller.scrollTop, Math.max(0, listTop - 120)); }, 120));
   renderModes(); renderVolume();
 }
 function renderModes() {
@@ -874,7 +874,7 @@ function go(viewName, { pl = null, push = true } = {}) {
   if (v === 'list') { if (push && from !== 'list') NAV.stack.push(from); }
   else { NAV.stack = []; NAV.lastRoot = v; }
   if (pl) setShown(pl);
-  if (EDIT.on && v !== 'list') exitEdit();
+  if (EDIT.on && v !== 'list') exitEdit(false);
   if (v !== 'list' && !$('searchBox').hidden) { query = ''; $('searchInput').value = ''; $('searchBox').hidden = true; }
   NAV.view = v; app.dataset.view = v;
   for (const [k, id] of Object.entries(VIEWS)) $(id).hidden = k !== v;
@@ -1194,13 +1194,13 @@ function renderRows() {
     const i = view[k], t = L[i];
     if (!t) continue;
     keys.add(t.key);
-    const isCur = t.key === curKey, sel = EDIT.on && EDIT.sel.has(t);
-    frag.append(el('div', { class: 'row' + (isCur ? ' cur' : '') + (isCur && playing ? ' on' : '') + (t.bad ? ' bad' : '') + (sel ? ' sel' : '') + (DRAG && DRAG.from === i ? ' dragging' : ''), style: `top:${k * ROW_H}px`, 'data-i': i, title: t.name },
-      EDIT.on ? el('div', { class: 'ck', role: 'checkbox', 'aria-checked': sel ? 'true' : 'false' }, el('span', { class: 'box' }, sel ? icon('check') : null)) : null,
+    const isCur = t.key === curKey, sel = EDIT.on && EDIT.sel.has(t), have = EDIT.on && !canPick(t);   // have: 넣을 플레이리스트에 이미 있는 곡
+    frag.append(el('div', { class: 'row' + (isCur ? ' cur' : '') + (isCur && playing ? ' on' : '') + (t.bad ? ' bad' : '') + (sel ? ' sel' : '') + (have ? ' have' : '') + (DRAG && DRAG.from === i ? ' dragging' : ''), style: `top:${k * ROW_H}px`, 'data-i': i, title: have ? `'${EDIT.target.name}'에 이미 있는 곡` : t.name },
+      EDIT.on ? el('div', { class: 'ck', role: 'checkbox', 'aria-checked': sel || have ? 'true' : 'false', 'aria-disabled': have ? 'true' : null }, el('span', { class: 'box' }, sel || have ? icon('check') : null)) : null,
       thumbEl(t.key, { cancelable: true, extra: isCur ? el('span', { class: 'nowp' }, icon(playing ? 'vol' : 'pause')) : null }),
-      el('div', { class: 'tx' }, el('div', { class: 't1' }, displayTitle(t)), el('div', { class: 't2' }, subLine(t))),
+      el('div', { class: 'tx' }, el('div', { class: 't1' }, displayTitle(t)), el('div', { class: 't2' }, have ? `이미 '${EDIT.target.name}'에 있어요` : subLine(t))),
       el('div', { class: 'd num' }, t.duration ? fmtTime(t.duration) : ''),
-      EDIT.on ? el('div', { class: 'grip', title: '끌어서 순서 바꾸기', 'aria-label': '끌어서 순서 바꾸기' }, icon('grip'))
+      EDIT.on ? (shown.virtual ? null : el('div', { class: 'grip', title: '끌어서 순서 바꾸기', 'aria-label': '끌어서 순서 바꾸기' }, icon('grip')))
         : el('button', { class: 'x', title: '곡 메뉴', 'aria-label': '곡 메뉴', 'data-act': 'more' }, icon('more'))));
   }
   spacer.replaceChildren(frag);
@@ -1217,19 +1217,34 @@ function scrollToCurrent() {
   const y = listTop + k * ROW_H, top = scroller.scrollTop, h = scroller.clientHeight - 200;
   if (y < top + 60 || y + ROW_H > top + h) scroller.scrollTop = Math.max(0, y - h / 2);
 }
+// 길게 누르기(터치)와 오른쪽 클릭(마우스)을 가르려고 마지막 누름의 종류를 기억 (contextmenu 에 pointerType 이 없는 WebView 대비).
+// pressAt: 길게 누른 그 손가락을 뗄 때 클릭이 따라오면 무시 (방금 고른 곡이 바로 풀리지 않게)
+let lastPtr = 'mouse', downAt = 0, pressAt = -1;
+spacer.addEventListener('pointerdown', e => { lastPtr = e.pointerType || 'mouse'; downAt = e.timeStamp; }, { passive: true });
 spacer.addEventListener('click', e => {
+  if (pressAt === downAt) { pressAt = -1; return; }
   const r = e.target.closest('.row'); if (!r) return;
   const i = +r.dataset.i;
-  if (EDIT.on) { if (!e.target.closest('.grip')) toggleSel(i); return; }
+  if (EDIT.on) { if (!e.target.closest('.grip')) toggleSel(i, { range: e.shiftKey }); return; }
   const more = e.target.closest('[data-act=more]');
   if (more) { trackMenu(rectOf(more), i); return; }
+  if (e.ctrlKey || e.metaKey || e.shiftKey) { enterEdit(shown.tracks[i]); return; }    // PC: Ctrl · Shift + 클릭 → 여러 곡 고르기 시작
   playFromShown(i);
 });
-// 오른쪽 클릭 · 길게 누르기 → 곡 메뉴
+// 오른쪽 클릭 → 곡 메뉴 (고르는 중이면 고른 곡 메뉴) · 휴대폰에서 길게 누르기 → 여러 곡 고르기
 spacer.addEventListener('contextmenu', e => {
-  const r = e.target.closest('.row'); if (!r || EDIT.on) return;
+  const r = e.target.closest('.row'); if (!r) return;
   e.preventDefault();
-  trackMenu(pointRect(e.clientX, e.clientY), +r.dataset.i);
+  const i = +r.dataset.i, t = shown.tracks[i];
+  if (!t || DRAG || e.target.closest('.grip')) return;
+  if ((e.pointerType || lastPtr) === 'touch') {
+    haptic(); pressAt = downAt;
+    if (EDIT.on) toggleSel(i); else enterEdit(t);
+    return;
+  }
+  if (!EDIT.on) { trackMenu(pointRect(e.clientX, e.clientY), i); return; }
+  if (!EDIT.sel.has(t) && canPick(t)) { EDIT.sel.add(t); EDIT.anchor = t; renderEditBar(); renderRows(); }
+  selMenu(pointRect(e.clientX, e.clientY));
 });
 new ResizeObserver(() => { if (NAV.view === 'list') { measureList(); scheduleRows(); } }).observe(scroller);
 
@@ -1339,24 +1354,33 @@ function toolButtons(to = null) {
     platform.canScan ? el('button', { class: 'btn', onclick: () => scanLibrary(to) }, icon('note'), platform.scanLabel + ' 불러오기') : null,
   ].filter(Boolean);
 }
-/** 음악 추가 메뉴 (위 막대의 + · 플레이리스트의 +) */
-function addMenu(anchor, to, { create = false } = {}) {
+/** 음악 추가 메뉴 (위 막대의 + · 플레이리스트의 +). create: 새 플레이리스트 만들기 · 파일/폴더를 골라 새 플레이리스트로,
+    pick: 다른 목록에 있는 곡을 골라 넣기 */
+function addMenu(anchor, to, { create = false, pick = false } = {}) {
+  const here = NAV.view === 'list' && shown === to;
   openMenu(anchor, [
-    ['file', '파일 추가', () => pickFiles(to), create ? `→ ${to.name}` : ''],
+    ['file', '파일 추가', () => pickFiles(to), here ? '' : `→ ${to.name}`],
     ['folder', '폴더 추가', () => pickFolder(to)],
     platform.canScan && ['note', platform.scanLabel + ' 불러오기', () => scanLibrary(to)],
+    pick && othersFor(to) && ['checkbox', '모든 곡에서 골라 넣기', () => pickInto(to)],
     create && null,
-    create && ['plus', '새 플레이리스트 만들기', () => createPlaylist()],
+    create && ['listNew', '새 플레이리스트 만들기', () => createPlaylist()],
+    create && ['file', '파일을 골라 새 플레이리스트로', () => pickToNew('files')],
+    create && ['folder', '폴더를 골라 새 플레이리스트로', () => pickToNew('folder')],
   ]);
+}
+/** p 에 아직 없는 곡이 다른 플레이리스트에 있는지 ('모든 곡에서 골라 넣기'를 보일지) */
+function othersFor(p) {
+  const have = new Set(p.tracks.map(t => t.key));
+  return pls.some(q => q !== p && q.tracks.some(t => !have.has(t.key)));
 }
 function toggleSearch(open) {
   if (NAV.view !== 'list') { showPlaylist(allSongsPl()); open = true; }
-  if (EDIT.on) exitEdit();
   const box = $('searchBox');
   const want = open != null ? open : box.hidden;
   box.hidden = !want;
   if (want) { $('searchInput').focus(); measureList(); scroller.scrollTop = Math.max(scroller.scrollTop, Math.max(0, listTop - 130)); }
-  else { query = ''; $('searchInput').value = ''; refreshView(); }
+  else { if (DRAG) DRAG.cancel(); query = ''; $('searchInput').value = ''; refreshView(); }
 }
 function renderEmpty() {
   $('empty').replaceChildren(
@@ -1364,7 +1388,8 @@ function renderEmpty() {
     el('b', {}, shown.virtual ? '아직 곡이 없어요' : `'${shown.name}'이(가) 비어 있어요`),
     shown.virtual ? el('div', {}, shown.kind === 'recent' ? '곡을 들으면 여기에 나와요' : '음악을 추가하면 여기에 나와요')
       : el('div', {}, platform.name === 'electron' ? '음악 파일이나 폴더를 추가하거나 창에 끌어다 놓으세요' : '음악 파일이나 폴더를 추가하세요'),
-    shown.virtual ? null : el('div', { class: 'tools' }, ...toolButtons(shown)));
+    shown.virtual ? null : el('div', { class: 'tools' }, ...toolButtons(shown),
+      othersFor(shown) ? el('button', { class: 'btn', onclick: () => pickInto(shown) }, icon('checkbox'), '모든 곡에서 골라 넣기') : null));
 }
 
 /* ======================= 플레이리스트 화면 머리 · 만들기 · 관리 ======================= */
@@ -1385,9 +1410,12 @@ function renderHero() {
         el('div', { class: 'hacts' },
           el('button', { class: 'btn primary pill', id: 'plPlay', disabled: !L.length, onclick: () => playIn(p, 0, { shuffle: false }) }, icon('play'), '재생'),
           el('button', { class: 'btn pill', id: 'plShuffle', disabled: !L.length, onclick: () => playIn(p, -1, { shuffle: true }) }, icon('shuffle'), '셔플'),
-          p.virtual ? null : el('button', { class: 'ib', id: 'plAdd', title: '음악 추가', 'aria-label': '음악 추가', onclick: e => addMenu(rectOf(e.currentTarget), p) }, icon('plus')),
+          p.virtual ? null : el('button', { class: 'ib', id: 'plAdd', title: '음악 추가', 'aria-label': '음악 추가', onclick: e => addMenu(rectOf(e.currentTarget), p, { pick: true }) }, icon('plus')),
+          el('button', { class: 'ib', id: 'plSelect', title: '여러 곡 선택', 'aria-label': '여러 곡 선택', disabled: !L.length, onclick: () => (EDIT.on ? exitEdit() : enterEdit()) }, icon('checkbox')),
           el('button', { class: 'ib', id: 'plMenu', title: '더보기', 'aria-label': '플레이리스트 메뉴', onclick: e => listMenu(rectOf(e.currentTarget)) }, icon('more')))));
   }
+  const sb = $('plSelect');
+  if (sb) { sb.classList.toggle('on', EDIT.on); sb.setAttribute('aria-pressed', EDIT.on ? 'true' : 'false'); }
   updateCount();
 }
 function renderPlHead() {
@@ -1403,6 +1431,9 @@ function listMenu(anchor) {
   const p = shown, has = p.tracks.length > 0;
   if (p.virtual) {
     openMenu(anchor, [
+      has && ['checkbox', '여러 곡 선택', () => enterEdit()],
+      has && ['search', '이 목록에서 찾기', () => toggleSearch(true)],
+      has && null,
       has && ['listAdd', '새 플레이리스트로 저장', () => saveAsPlaylist(p)],
       has && ['listAdd', '다른 플레이리스트에 모두 넣기…', () => addToPlaylistMenu(anchor, p.tracks)],
       null,
@@ -1411,7 +1442,7 @@ function listMenu(anchor) {
     return;
   }
   openMenu(anchor, [
-    has && ['check', '편집 (여러 곡 선택 · 순서 바꾸기)', enterEdit],
+    has && ['checkbox', '여러 곡 선택 · 순서 바꾸기', () => enterEdit()],
     has && ['sort', '정렬…', () => openMenu(anchor, [
       ['sort', '제목 순', () => sortList('title')],
       ['sort', '아티스트 순', () => sortList('artist')],
@@ -1450,7 +1481,7 @@ function uniqueName(base, except = null) {
 /** 플레이리스트 화면에 보일 목록 바꾸기 (재생 중인 곡은 그대로) */
 function setShown(pl) {
   if (!pl || pl === shown) return;
-  if (EDIT.on) exitEdit();
+  if (EDIT.on) exitEdit(false);
   shown = pl;
   query = ''; $('searchInput').value = ''; $('searchBox').hidden = true;
   if (!pl.virtual) P.lastReal = pl;
@@ -1510,35 +1541,114 @@ async function deletePlaylist(p) {
   }
   p.tracks.forEach(t => { t.removed = true; });
   releaseUnused(p.tracks.map(t => t.key));
-  if (p === shown) { if (EDIT.on) exitEdit(); shown = pls[Math.min(i, pls.length - 1)]; if (NAV.view === 'list') back(); }
+  if (p === shown || p === EDIT.target) { if (EDIT.on) exitEdit(false); }
+  if (p === shown) { shown = pls[Math.min(i, pls.length - 1)]; if (NAV.view === 'list') back(); }
   else if (NAV.view === 'list') refreshView();
   saveList(); if (MGR.render) MGR.render();
   toast(`'${p.name}'을(를) 지웠어요`);
 }
+/** 받침에 맞는 조사: josa('출퇴근', '으로', '로') → '으로' ('으로'는 ㄹ 받침이면 '로'). 한글 · 숫자로 끝나지 않으면 '을(를)' · '(으)로' */
+function josa(word, a, b) {
+  const c = String(word || '').trim().slice(-1), k = c.charCodeAt(0) - 0xAC00;
+  let jong;
+  if (k >= 0 && k <= 11171) jong = k % 28;
+  else if (/[0-9]/.test(c)) jong = [21, 8, 0, 16, 0, 0, 1, 8, 8, 0][+c];      // 영 일 이 삼 사 오 육 칠 팔 구
+  else return a === '으로' ? '(으)로' : `${a}(${b})`;
+  if (a === '으로') return jong && jong !== 8 ? '으로' : '로';
+  return jong ? a : b;
+}
+/** 알림의 '보기' 단추: 그 플레이리스트를 보고 있지 않을 때만 */
+const viewLink = p => (NAV.view === 'list' && shown === p ? null : { label: '보기', fn: () => { if (pls.includes(p)) showPlaylist(p); } });
 /** 곡들을 다른 플레이리스트에 복사해 넣기 (이미 있는 곡은 건너뜀) */
-function addTracksTo(pl, tracks) {
+function addTracksTo(pl, tracks, { link = true } = {}) {
   const have = new Set(pl.tracks.map(t => t.key));
   const add = [];
   for (const t of tracks) if (t && !t.removed && !have.has(t.key)) { have.add(t.key); add.push(mkTrack(t)); }
   if (!add.length) { toast(`'${pl.name}'에 이미 있는 곡이에요`); return 0; }
+  const skip = tracks.filter(t => t && !t.removed).length - add.length;
   pl.tracks.push(...add); if (pl === playPl) order = [];
   saveList(); if (pl === shown && NAV.view === 'list') refreshView(); if (MGR.render) MGR.render();
-  toast(`'${pl.name}'에 ${add.length}곡을 넣었어요`);
+  toast(`'${pl.name}'에 ${add.length}곡을 넣었어요` + (skip > 0 ? ` · ${skip}곡은 이미 있었어요` : ''), link ? viewLink(pl) : null);
   return add.length;
 }
-function addToPlaylistMenu(anchor, tracks, exclude = null) {
-  const items = pls.filter(p => p !== exclude).map(p => ['list', p.name, () => addTracksTo(p, tracks), `${p.tracks.length}곡`]);
+/** 넣을 플레이리스트 고르기. done: 고르기 막대에서 열었으면 넣은 뒤 고르기를 끝냄 */
+function addToPlaylistMenu(anchor, tracks, exclude = null, { done = false } = {}) {
+  const items = pls.filter(p => p !== exclude).map(p => ['list', p.name, () => { addTracksTo(p, tracks); if (done && EDIT.on) exitEdit(false); }, `${p.tracks.length}곡`]);
   if (items.length) items.push(null);
-  items.push(['plus', '새 플레이리스트 만들어 넣기', async () => { const p = await createPlaylist({ show: false }); if (p) addTracksTo(p, tracks); }]);
+  items.push(['listNew', '새 플레이리스트 만들어 넣기', () => newPlaylistFrom(tracks, { hint: shown.virtual && shown.kind === 'genre' ? shown.name : '' })]);
+  openMenu(anchor, items);
+}
+/** 고른 곡으로 새 플레이리스트 만들기 (move: 원래 목록에서 옮겨 옴). 이름은 앨범 · 아티스트가 모두 같으면 그 이름을 먼저 권함 */
+async function newPlaylistFrom(tracks, { move = false, src = shown, hint = '' } = {}) {
+  tracks = tracks.filter(t => t && !t.removed);
+  if (!tracks.length) return null;
+  const name = await dialog({ title: move ? '새 플레이리스트로 이동' : '새 플레이리스트', text: `고른 ${tracks.length}곡을 ${move ? '옮겨' : '넣어'} 만들어요. 이름을 정해 주세요.`,
+    input: uniqueName(suggestName(tracks, hint)), okText: '만들기', maxLength: 40 });
+  if (!name) return null;
+  if (move && (src.virtual || !pls.includes(src))) return null;
+  const p = mkPl(uniqueName(name));
+  pls.push(p);
+  if (move) { moveTracksTo(p, tracks, src, { made: true }); return p; }
+  const seen = new Set();
+  for (const t of tracks) if (!seen.has(t.key)) { seen.add(t.key); p.tracks.push(mkTrack(t)); }
+  if (EDIT.on) exitEdit(false);
+  saveList(); if (MGR.render) MGR.render();
+  toast(`'${p.name}'${josa(p.name, '을', '를')} 만들고 ${p.tracks.length}곡을 넣었어요`, viewLink(p));
+  return p;
+}
+/** 새 플레이리스트 이름 권하기: 여러 곡의 앨범이나 아티스트가 모두 같으면 그 이름, 아니면 hint (장르 등) */
+function suggestName(tracks, hint = '') {
+  const same = f => { const v = String(tracks[0][f] || '').trim(); return v && tracks.every(t => String(t[f] || '').trim() === v) ? v : ''; };
+  return (tracks.length > 1 && (same('album') || same('artist'))) || hint || '새 플레이리스트';
+}
+/** 곡을 다른 플레이리스트로 이동: 곡 객체째 옮기고 원래 목록에서는 뺌 (이미 있는 곡은 하나만 남김).
+    지금 듣는 곡이 함께 옮겨 가면 끊지 않고, 재생 목록도 그 플레이리스트로 바뀌어 이어서 재생 */
+function moveTracksTo(dst, tracks, src = shown, { made = false } = {}) {
+  if (!dst || !src || dst === src || dst.virtual || src.virtual || !pls.includes(dst) || !pls.includes(src)) return 0;
+  if (DRAG) DRAG.cancel();
+  const A = src.tracks, B = dst.tracks, want = new Set(tracks), mv = A.filter(t => want.has(t));
+  if (!mv.length) return 0;
+  const cur = playPl === src && P.index >= 0 ? list[P.index] : null, follow = !!cur && want.has(cur);
+  const at = new Map(B.map((t, i) => [t.key, i]));
+  let dup = 0;
+  for (const t of mv) {
+    const j = at.get(t.key);
+    if (j == null) { at.set(t.key, B.length); B.push(t); continue; }
+    dup++;
+    if (t === cur) { B[j].removed = true; B[j] = t; }      // 이미 있던 곡이 지금 듣는 곡: 그 자리를 이 곡으로 (재생이 끊기지 않게)
+    else t.removed = true;
+  }
+  const gone = new Set(mv), keep = A.filter(t => !gone.has(t));
+  A.length = 0; A.push(...keep);                          // 배열은 그대로 (list 와 같은 배열일 수 있음)
+  if (playPl === src || playPl === dst) order = [];
+  if (follow) { playPl = dst; list = B; P.index = B.indexOf(cur); P.lastReal = dst; }
+  else if (cur) P.index = A.indexOf(cur);
+  if (EDIT.on) exitEdit(false);
+  saveList(); if (MGR.render) MGR.render();
+  if (NAV.view === 'list' && (shown === src || shown === dst)) refreshView();
+  if (follow) { renderNowPlaying(); renderPlHead(); markPlaying(); if (PL.open && PL.tab === 'queue') renderQueue(); }
+  toast((made ? `'${dst.name}'${josa(dst.name, '을', '를')} 만들고 ${mv.length}곡을 이동했어요` : `'${dst.name}'${josa(dst.name, '으로', '로')} ${mv.length}곡을 이동했어요`)
+    + (dup ? ` · ${dup}곡은 이미 있었어요` : ''), viewLink(dst));
+  return mv.length;
+}
+/** 옮길 플레이리스트 고르기 */
+function moveMenu(anchor, tracks, src = shown) {
+  if (src.virtual) return;
+  const items = pls.filter(p => p !== src).map(p => ['list', p.name, () => moveTracksTo(p, tracks, src), `${p.tracks.length}곡`]);
+  if (items.length) items.push(null);
+  items.push(['listNew', '새 플레이리스트 만들어 이동', () => newPlaylistFrom(tracks, { move: true, src })]);
   openMenu(anchor, items);
 }
 function trackMenu(anchor, i) {
   const t = shown.tracks[i]; if (!t) return;
+  const ro = !!shown.virtual;
   openMenu(anchor, [
     ['play', '재생', () => { const j = shown.tracks.indexOf(t); if (j >= 0) playFromShown(j); }],
-    ['listAdd', '다른 플레이리스트에 넣기…', () => addToPlaylistMenu(anchor, [t], shown.virtual ? null : shown)],
-    !shown.virtual && null,
-    !shown.virtual && ['trash', '이 목록에서 빼기', () => { const j = shown.tracks.indexOf(t); if (j >= 0) removeTracks([j]); }],
+    ['listAdd', '다른 플레이리스트에 넣기…', () => addToPlaylistMenu(anchor, [t], ro ? null : shown)],
+    !ro && ['listMove', '다른 플레이리스트로 이동…', () => moveMenu(anchor, [t])],
+    ['checkbox', '여러 곡 선택', () => enterEdit(t)],
+    !ro && null,
+    !ro && ['trash', '이 목록에서 빼기', () => { const j = shown.tracks.indexOf(t); if (j >= 0) removeTracks([j]); }],
   ]);
 }
 /** 홈의 곡 (최근 · 장르) 메뉴 */
@@ -1628,40 +1738,154 @@ function markSide(rebuild) {
   markPlaying();
 }
 
-/* 편집: 여러 곡 고르기 · 끌어서 순서 바꾸기 */
-const EDIT = { on: false, sel: new Set() };
+/* 여러 곡 고르기 (모든 목록) · 끌어서 순서 바꾸기 (플레이리스트)
+   들어가기: 위 '선택' 단추 · 목록 메뉴 · 곡 메뉴 · 휴대폰에서 곡을 길게 누르기 · PC 에서 Ctrl/Shift + 클릭 · Ctrl+A
+   target: '모든 곡에서 골라 넣기'로 들어왔을 때 곡을 넣을 플레이리스트 (넣거나 취소하면 그 목록으로 돌아감) */
+const EDIT = { on: false, sel: new Set(), anchor: null, target: null, have: null };
 let DRAG = null;
-function enterEdit() {
-  if (!shown.tracks.length || shown.virtual) return;
-  EDIT.on = true; EDIT.sel.clear();
-  if (!$('searchBox').hidden) { query = ''; $('searchInput').value = ''; $('searchBox').hidden = true; }
-  $('listPane').classList.add('editing'); document.body.classList.add('editing');
+const haptic = () => { try { if (platform.haptic) platform.haptic(); } catch (e) { /* noop */ } };
+/** 고를 수 있는 곡인지 (넣을 플레이리스트에 이미 있는 곡은 못 고름) */
+const canPick = t => !EDIT.have || !EDIT.have.has(t.key);
+function enterEdit(first = null, { target = null } = {}) {
+  if (!shown.tracks.length) return;
+  if (!EDIT.on) {
+    EDIT.on = true; EDIT.sel.clear(); EDIT.anchor = null;
+    $('listPane').classList.add('editing'); document.body.classList.add('editing');
+  }
+  EDIT.target = target && !target.virtual && pls.includes(target) ? target : null;
+  EDIT.have = EDIT.target ? new Set(EDIT.target.tracks.map(t => t.key)) : null;
+  $('listPane').classList.toggle('ro', !!shown.virtual);       // 모든 곡 · 장르 · 최근: 순서 바꾸기 · 이동 · 빼기 없음
+  if (first && shown.tracks.includes(first) && canPick(first)) { EDIT.sel.add(first); EDIT.anchor = first; }
   refreshView();
+  if (first) revealRow(first);
 }
-function exitEdit() {
+/** 고르기 막대가 막 나타나 누른 곡을 가렸으면 그 곡이 막대 위로 오게 굴림 */
+function revealRow(t) {
+  const k = view.indexOf(shown.tracks.indexOf(t));
+  if (k < 0 || NAV.view !== 'list' || $('editBar').hidden) return;
+  const top = scroller.getBoundingClientRect().top + listTop + k * ROW_H - scroller.scrollTop;
+  const over = top + ROW_H - ($('editBar').getBoundingClientRect().top - 10);
+  if (over > 0) scroller.scrollBy({ top: over, behavior: 'smooth' });
+}
+/** 고르기 끝내기. nav: '모든 곡에서 골라 넣기'였으면 넣을 플레이리스트로 돌아감 (다른 화면으로 가는 중이면 false) */
+function exitEdit(nav = true) {
   if (!EDIT.on) return;
   if (DRAG) DRAG.cancel();
-  EDIT.on = false; EDIT.sel.clear();
-  $('listPane').classList.remove('editing'); document.body.classList.remove('editing'); $('editBar').hidden = true;
+  const back = EDIT.target;
+  EDIT.on = false; EDIT.sel.clear(); EDIT.anchor = null; EDIT.target = null; EDIT.have = null;
+  $('listPane').classList.remove('editing', 'ro'); document.body.classList.remove('editing'); $('editBar').hidden = true;
+  const sb = $('plSelect'); if (sb) { sb.classList.remove('on'); sb.setAttribute('aria-pressed', 'false'); }
+  if (nav && back && pls.includes(back)) { showPlaylist(back); return; }
   renderRows();
 }
-function toggleSel(i) {
-  const t = shown.tracks[i]; if (!t) return;
-  if (EDIT.sel.has(t)) EDIT.sel.delete(t); else EDIT.sel.add(t);
+/** 곡 하나 고르기 · 풀기. range(Shift): 앞서 누른 곡부터 여기까지 보이는 순서대로 모두 고름 */
+function toggleSel(i, { range = false } = {}) {
+  const L = shown.tracks, t = L[i]; if (!t || !canPick(t)) return;
+  const a = range && EDIT.anchor ? view.indexOf(L.indexOf(EDIT.anchor)) : -1, b = view.indexOf(i);
+  if (a >= 0 && b >= 0) { for (let k = Math.min(a, b); k <= Math.max(a, b); k++) { const x = L[view[k]]; if (canPick(x)) EDIT.sel.add(x); } }
+  else { if (EDIT.sel.has(t)) EDIT.sel.delete(t); else EDIT.sel.add(t); EDIT.anchor = t; }
   renderEditBar(); renderRows();
 }
+/** 보이는 곡(검색 중이면 찾은 곡)을 모두 고르기 · 모두 풀기 */
+function selectAllVisible(on) {
+  const L = shown.tracks;
+  for (const i of view) { const t = L[i]; if (!canPick(t)) continue; if (on) EDIT.sel.add(t); else EDIT.sel.delete(t); }
+  renderEditBar(); renderRows();
+}
+const picked = () => shown.tracks.filter(t => EDIT.sel.has(t));        // 목록 순서대로
 const selectedIdx = () => shown.tracks.map((t, i) => EDIT.sel.has(t) ? i : -1).filter(i => i >= 0);
+const genreHintOf = () => (shown.virtual && shown.kind === 'genre' ? shown.name : '');
+/** '모든 곡에서 골라 넣기': 모든 곡을 고르기 화면으로 열고, 넣거나 취소하면 p 로 돌아감 */
+function pickInto(p) {
+  if (!p || p.virtual || !pls.includes(p)) return;
+  const all = allSongsPl();
+  if (!all.tracks.length) { toast('아직 곡이 없어요 — 먼저 음악을 추가해 주세요'); return; }
+  showPlaylist(all);
+  enterEdit(null, { target: p });
+}
+function pickDone() {
+  const tg = EDIT.target;
+  if (!tg || !pls.includes(tg)) { exitEdit(false); return; }
+  addTracksTo(tg, picked(), { link: false });
+  exitEdit();
+}
 function renderEditBar() {
-  const n = EDIT.sel.size, L = shown.tracks, all = L.length > 0 && n === L.length;
+  const L = shown.tracks, n = picked().length, ro = !!shown.virtual, tg = EDIT.target;
+  const can = view.filter(i => canPick(L[i])), all = can.length > 0 && can.every(i => EDIT.sel.has(L[i]));
   const bar = $('editBar'); bar.hidden = false;
-  bar.replaceChildren(
-    el('div', { class: 'eh' },
-      el('span', { class: 'n' }, n ? `${n}곡 선택` : '곡을 눌러 고르고, ≡ 를 끌어 순서를 바꿔요'),
-      el('button', { class: 'btn ghost', onclick: () => { if (all) EDIT.sel.clear(); else L.forEach(t => EDIT.sel.add(t)); renderEditBar(); renderRows(); } }, all ? '선택 해제' : '모두 선택')),
+  const head = el('div', { class: 'eh' },
+    el('span', { class: 'n' + (n ? '' : ' hint') }, n ? `${n}곡 선택` : tg ? `'${tg.name}'에 넣을 곡을 골라요` : ro ? '곡을 눌러 골라요' : '곡을 눌러 고르고, ≡ 를 끌어 순서를 바꿔요'),
+    el('button', { class: 'btn ghost', disabled: !can.length, onclick: () => selectAllVisible(!all) }, all ? '선택 해제' : '모두 선택'));
+  if (tg) {
+    bar.replaceChildren(head,
+      el('div', { class: 'ea one' }, el('button', { class: 'btn primary', disabled: !n, title: `'${tg.name}'에 넣기`, onclick: pickDone }, icon('listAdd'), n ? `'${tg.name}'에 ${n}곡 넣기` : `'${tg.name}'에 넣기`)),
+      el('button', { class: 'btn ghost done', onclick: () => exitEdit() }, '취소'));
+    return;
+  }
+  // PC 는 긴 이름(lb), 휴대폰은 아이콘 아래 짧은 이름(sl)
+  const act = (ic, label, short, fn) => el('button', { class: 'btn', disabled: !n, title: label, 'aria-label': label, onclick: fn }, icon(ic), el('span', { class: 'lb' }, label), el('span', { class: 'sl' }, short));
+  bar.replaceChildren(head,
     el('div', { class: 'ea' },
-      el('button', { class: 'btn', disabled: !n, onclick: e => addToPlaylistMenu(rectOf(e.currentTarget), L.filter(t => EDIT.sel.has(t)), shown) }, icon('listAdd'), '플레이리스트에 넣기'),
-      el('button', { class: 'btn', disabled: !n, onclick: () => removeTracks(selectedIdx()) }, icon('trash'), '빼기'),
-      el('button', { class: 'btn primary', onclick: exitEdit }, '완료')));
+      act('listNew', '새 플레이리스트로', '새 목록', () => newPlaylistFrom(picked(), { hint: genreHintOf() })),
+      act('listAdd', '플레이리스트에 넣기', '넣기', e => addToPlaylistMenu(rectOf(e.currentTarget), picked(), ro ? null : shown, { done: true })),
+      ro ? null : act('listMove', '플레이리스트로 이동', '이동', e => moveMenu(rectOf(e.currentTarget), picked())),
+      ro ? null : act('trash', '빼기', '빼기', () => removeTracks(selectedIdx()))),
+    el('button', { class: 'btn primary done', onclick: () => exitEdit() }, '완료'));
+}
+/** PC: 고르는 중에 오른쪽 클릭 → 고른 곡 메뉴 */
+function selMenu(anchor) {
+  const tr = picked(), ro = !!shown.virtual, tg = EDIT.target;
+  if (!tr.length) return;
+  if (tg) { openMenu(anchor, [['listAdd', `'${tg.name}'에 ${tr.length}곡 넣기`, pickDone]]); return; }
+  openMenu(anchor, [
+    ['listNew', `${tr.length}곡으로 새 플레이리스트`, () => newPlaylistFrom(tr, { hint: genreHintOf() })],
+    ['listAdd', '플레이리스트에 넣기…', () => addToPlaylistMenu(anchor, tr, ro ? null : shown, { done: true })],
+    !ro && ['listMove', '플레이리스트로 이동…', () => moveMenu(anchor, tr)],
+    !ro && null,
+    !ro && ['trash', `${tr.length}곡 빼기`, () => removeTracks(selectedIdx())],
+  ]);
+}
+/** 파일 · 폴더를 골라 바로 새 플레이리스트로 (이름은 고른 곡들이 함께 든 폴더 이름을 먼저 권함) */
+async function pickToNew(kind) {
+  const dir = kind === 'folder';
+  let items;
+  try { items = dir ? await platform.pickFolder() : await platform.pickFiles(); }
+  catch (e) { toast(errMsg(e, dir ? '폴더를 열지 못했어요' : '파일을 열지 못했어요')); return null; }
+  if (!items) return null;                                            // 고르지 않고 닫음
+  if (!items.length) { if (dir) toast('폴더에서 음악 파일을 찾지 못했어요'); return null; }
+  const name = await dialog({ title: '새 플레이리스트', text: `고른 ${items.length}곡을 넣어 만들어요. 이름을 정해 주세요.`, input: uniqueName(folderName(items)), okText: '만들기', maxLength: 40 });
+  if (!name) { releaseUnused(items.map(it => it.key)); return null; }   // 안드로이드: 받아 둔 파일 읽기 권한 돌려주기
+  const p = mkPl(uniqueName(name));
+  pls.push(p);
+  addItems(items, { to: p, open: true });
+  return p;
+}
+/** 곡들이 함께 든 폴더 이름 (모두 한 폴더 아래에 있을 때만, 아니면 '새 플레이리스트') */
+function folderName(items) {
+  let common = null;
+  for (const it of items) {
+    const parts = folderParts(it.key);
+    if (!parts) return '새 플레이리스트';
+    if (!common) common = parts;
+    else { let k = 0; while (k < common.length && k < parts.length && common[k] === parts[k]) k++; common.length = k; }
+    if (!common.length) return '새 플레이리스트';
+  }
+  const n = common && common[common.length - 1];
+  return n && !/^[A-Za-z]:$/.test(n) ? n : '새 플레이리스트';
+}
+/** 파일이 든 폴더들 (모르면 null): PC 경로 · 안드로이드 문서 주소의 문서 번호 (primary:Music/앨범/곡.flac) */
+function folderParts(key) {
+  let s = String(key || '');
+  if (/^content:/i.test(s)) {
+    const m = s.match(/\/document\/([^/?#]+)/); if (!m) return null;
+    try { s = decodeURIComponent(m[1]); } catch (e) { return null; }
+    s = s.replace(/^[^:/]*:/, '');                                     // 'primary:' · 'raw:' 떼기
+  } else if (/^file:/i.test(s)) {
+    try { s = decodeURIComponent(s.replace(/^file:\/*/i, '/')); } catch (e) { return null; }
+  } else if (/^[a-z][a-z0-9+.-]+:/i.test(s)) return null;               // blob: · http: 등 (C:\ 같은 드라이브는 한 글자라 여기에 안 걸림)
+  const parts = s.split(/[\\/]+/).filter(Boolean);
+  parts.pop();                                                         // 파일 이름
+  return parts.length ? parts : null;
 }
 // ≡ 를 끌어 순서 바꾸기 (마우스 · 터치 모두). 줄은 다시 그려지므로 vlist 가 포인터를 잡고 있는다. 화면 끝에 가까우면 페이지를 굴린다
 vlist.addEventListener('pointerdown', e => {
@@ -2781,9 +3005,13 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) { can
 
 /* ======================= 토스트 · 대화상자 · 메뉴 ======================= */
 let toastT = 0;
-function toast(msg) {
-  const t = $('toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600);
+/** 잠깐 뜨는 알림. action: { label, fn } → 알림 안에 단추 하나 (예: 만든 플레이리스트 '보기'), 조금 더 오래 보임 */
+function toast(msg, action = null) {
+  const t = $('toast');
+  const hide = () => { clearTimeout(toastT); t.classList.remove('show', 'act'); };
+  t.replaceChildren(el('span', {}, msg), ...(action ? [el('button', { class: 'link', onclick: () => { hide(); action.fn(); } }, action.label)] : []));
+  t.classList.toggle('act', !!action); t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(hide, action ? 5000 : 2600);
 }
 let openModal = null;
 function dialog({ title, text, input, okText = '확인', cancelText = '취소', maxLength = 20 }) {
@@ -2821,7 +3049,9 @@ function openMenu(anchor, items, { align = 'right' } = {}) {
   document.body.append(menu);
   const r = anchor.getBoundingClientRect(), mw = menu.offsetWidth, mh = menu.offsetHeight;
   menu.style.left = clamp(align === 'left' ? r.left : r.right - mw, 8, innerWidth - mw - 8) + 'px';
-  menu.style.top = (r.bottom + 6 + mh > innerHeight ? Math.max(8, r.top - mh - 6) : r.bottom + 6) + 'px';
+  // 아래가 모자라거나, 화면 아래쪽(고르기 막대 등)에서 열면 위로
+  const up = r.bottom + 6 + mh > innerHeight || (r.top > innerHeight * 0.6 && r.top - mh - 6 >= 8);
+  menu.style.top = (up ? Math.max(8, r.top - mh - 6) : r.bottom + 6) + 'px';
   const onDoc = e => { if (!menu.contains(e.target)) close(); };
   const onKey = e => { if (e.key === 'Escape') close(); };
   function close() { menu.remove(); document.removeEventListener('pointerdown', onDoc, true); document.removeEventListener('keydown', onKey); openMenuClose = null; }
@@ -2856,7 +3086,9 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && tg.closest && tg.closest('button, [role=button]')) return;
   const a = engine.deck.a, ctrl = e.ctrlKey || e.metaKey;
   if (EDIT.on && e.key === 'Escape') { exitEdit(); return; }
-  if (EDIT.on && e.key === 'Delete' && EDIT.sel.size) { if (DRAG) DRAG.cancel(); removeTracks(selectedIdx()); return; }
+  if (EDIT.on && e.key === 'Delete' && EDIT.sel.size && !shown.virtual) { if (DRAG) DRAG.cancel(); removeTracks(selectedIdx()); return; }
+  // Ctrl+A: 목록 화면에서 보이는 곡 모두 고르기
+  if (ctrl && e.key.toLowerCase() === 'a' && NAV.view === 'list' && !PL.open && shown.tracks.length) { e.preventDefault(); if (!EDIT.on) enterEdit(); selectAllVisible(true); return; }
   if (e.key === 'Escape') { if (PL.open) closePlayer(); else if (!$('searchBox').hidden) toggleSearch(false); else back(); return; }
   if (e.key === ' ') { e.preventDefault(); togglePlay(); }
   else if (e.key === 'ArrowRight' && ctrl) { e.preventDefault(); next(); }
@@ -3021,5 +3253,6 @@ init();
 // 개발 · 테스트용
 window.__ullim = { engine, S, get list() { return list; }, get pls() { return pls; }, get shown() { return shown; }, get playPl() { return playPl; },
   addItems, playIndex, playFromShown, applySoundPreset, go, back, P, NAV, PL, setTab: t => (t === 'list' ? showPlaylist(shown) : go(t)), showPlaylist, createPlaylist, renamePlaylist, deletePlaylist, duplicatePlaylist,
-  addTracksTo, removeTracks, moveTrack, enterEdit, exitEdit, toggleSel, managePlaylists, toM3U, importPlaylists, checkUpdate, UPD,
+  addTracksTo, removeTracks, moveTrack, enterEdit, exitEdit, toggleSel, selectAllVisible, newPlaylistFrom, moveTracksTo, pickInto, pickToNew, folderName, suggestName, josa,
+  get EDIT() { return EDIT; }, managePlaylists, toM3U, importPlaylists, checkUpdate, UPD,
   openPlayer, closePlayer, setPlayerTab, playIn, renderHome, recentPl, genrePl, allSongsPl, genreGroups, library, get recent() { return recent; }, toggleSearch, LY, applyTheme, setPlayGlyph, setGlassMode: () => setGlass(S.glass, narrow()) };

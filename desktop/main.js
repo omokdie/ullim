@@ -219,7 +219,7 @@ ipcMain.handle('pick-files', async () => {
     title: '음악 파일 추가', properties: ['openFile', 'multiSelections'],
     filters: [{ name: '오디오 파일', extensions: [...AUDIO_EXT] }, { name: '모든 파일', extensions: ['*'] }],
   });
-  return r.canceled ? [] : r.filePaths.filter(isAudio);
+  return r.canceled ? null : r.filePaths.filter(isAudio);     // null = 고르지 않고 닫음
 });
 /* ---------- 플레이리스트 파일 (M3U · M3U8 · PLS) ---------- */
 const PL_TEST_DIR = process.env.ULLIM_PLAYLIST_TEST_DIR || '';   // 시험용: 대화상자 없이 이 폴더에 저장 · 이 폴더에서 읽기
@@ -301,7 +301,7 @@ ipcMain.handle('open-playlists', async () => {
 });
 ipcMain.handle('pick-folder', async () => {
   const r = await dialog.showOpenDialog(win, { title: '음악 폴더 추가', properties: ['openDirectory', 'multiSelections'] });
-  return r.canceled ? [] : expand(r.filePaths);
+  return r.canceled ? null : expand(r.filePaths);
 });
 ipcMain.handle('scan-music', async () => expand([app.getPath('music')]));
 ipcMain.handle('expand-paths', async (_e, paths) => expand(Array.isArray(paths) ? paths : []));
