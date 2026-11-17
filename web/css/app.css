@@ -575,6 +575,7 @@ body.pl-open .side, body.pl-open .main { visibility: hidden; }
 .toast {
   position: fixed; z-index: 50; left: 50%; bottom: calc(var(--bar-h) + var(--gap) * 2 + 10px); transform: translateX(-50%) translateY(16px);
   padding: 10px 18px; border-radius: 18px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: calc(100% - 32px);
+  width: max-content;            /* left: 50% 라도 화면 반 폭에서 줄바꿈되지 않게 */
 }
 .toast.show { opacity: 1; transform: translateX(-50%); }
 .toast.show.act { pointer-events: auto; }
