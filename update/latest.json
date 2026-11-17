@@ -1,15 +1,15 @@
 {
-  "version": "1.3.0",
-  "notes": "끊김 · 지지직 없는 새 음장 엔진, 휠 조절 · 재생 화면 속도 · 음장 버튼, 고음질 출력(DAC), DSD · APE · WavPack · ALAC 등 더 많은 형식 재생",
+  "version": "1.3.1",
+  "notes": "여러 곡을 골라 새 플레이리스트 만들기 · 다른 플레이리스트로 이동(듣던 곡은 끊기지 않음), 파일 · 폴더를 골라 바로 새 플레이리스트로, 모든 곡에서 골라 넣기",
   "windows": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.3.0/Ullim-Setup-1.3.0.exe",
-    "sha256": "6e33e3369899fe32af056b7e1efd056597cc64ed1827380b519774ea696d5815",
-    "size": 96331948
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.3.1/Ullim-Setup-1.3.1.exe",
+    "sha256": "6c7b4ebed39fede3ef242fbfa8a003dbc48f894c97a9e5fd97ca3c24d7ba64a9",
+    "size": 96313321
   },
   "android": {
-    "url": "https://github.com/omokdie/ullim/releases/download/v1.3.0/Ullim-1.3.0.apk",
-    "sha256": "0da1b5c4cf19412db5fdb47cd83a97d134ecbef06a6e8ed42def27ec2a784820",
-    "size": 1106591,
-    "versionCode": 10
+    "url": "https://github.com/omokdie/ullim/releases/download/v1.3.1/Ullim-1.3.1.apk",
+    "sha256": "426972b188a1bf42b529b9460e795e2ea8d8c884716cba09fdfb808111307eaf",
+    "size": 1114783,
+    "versionCode": 11
   }
 }
